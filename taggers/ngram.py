@@ -66,16 +66,20 @@ def load_model(name: str) -> "TrigramLM":
     if not path.exists():
         raise FileNotFoundError(
             f"Model bulunamadı: {path}\n"
-            f"Önce 'python trigram_morph.py' çalıştırın."
+            f"Önce 'python -m taggers.ngram' çalıştırın."
         )
 
-    import trigram_morph as _tm
+    import taggers.ngram as _tm
 
     class _Unpickler(pickle.Unpickler):
-        """__main__ olarak kaydedilen modeli trigram_morph modülüne yönlendirir."""
+        """__main__ / trigram_morph / dep_parser で保存されたモデルを新モジュールへリダイレクト"""
         def find_class(self, module, classname):
-            if module == "__main__":
-                module = "trigram_morph"
+            if module in ("__main__", "trigram_morph"):
+                module = "taggers.ngram"
+            elif module == "dep_parser":
+                module = "taggers.dep"
+            elif module == "unigram_morph":
+                module = "taggers.unigram"
             return super().find_class(module, classname)
 
     with open(path, "rb") as f:

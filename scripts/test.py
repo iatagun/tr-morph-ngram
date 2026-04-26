@@ -16,8 +16,8 @@ import sys
 import io
 from pathlib import Path
 
-import dep_parser as _dep_parser
-from trigram_morph import (
+from taggers import dep as _dep_parser
+from taggers.ngram import (
     load_model,
     heuristic_candidates,
     heuristic_candidates_weighted,
@@ -33,7 +33,7 @@ from trigram_morph import (
     BOS1, BOS2,
     MODEL_DIR,
 )
-from unigram_morph import UnigramLM
+from taggers.unigram import UnigramLM
 
 
 def load_orchestrator() -> OrchestratorLM:
@@ -343,7 +343,7 @@ def main():
     # İstatistiksel dep parser — en iyi model önce denenir
     dep_model = None
     for _dep_name in ("model_dep_pred20", "model_dep_pred", "model_dep"):
-        dep_pkl = Path(__file__).parent / "models" / f"{_dep_name}.pkl"
+        dep_pkl = Path(__file__).parent.parent / "models" / f"{_dep_name}.pkl"
         if dep_pkl.exists():
             try:
                 dep_model = _dep_parser.load_parser(_dep_name)

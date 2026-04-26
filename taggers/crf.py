@@ -1,0 +1,573 @@
+"""
+crf_morph.py — Per-Feature CRF Türkçe Morfolojik Etiketleyici
+=============================================================
+Her morfolojik özellik boyutu (Aspect, Mood, Voice, …) için ayrı bir
+linear-chain CRF eğitilir. Bu yaklaşım:
+
+  * 1648 tam FEATS etiketi yerine max ~9 etiket/boyut → ~100x hızlı
+  * Unseen FEATS kombinasyonu sorununu çözer (her boyut bağımsız)
+  * Sequence modeling (CRF geçiş ağırlıkları) korunur
+
+Kullanım:
+  python crf_morph.py              # eğit + değerlendir
+  python crf_morph.py --tune       # c grid search
+
+eval.py entegrasyonu: FactorizedCRFTagger.decode_viterbi() HybridLM ile aynı
+arayüzü sağlar.
+"""
+
+import re
+import pickle
+import argparse
+from pathlib import Path
+from collections import defaultdict
+from typing import List, Dict, Tuple, Optional
+
+import sklearn_crfsuite
+
+from data.conllu import read_conllu as _read_conllu, parse_feats as _parse_feats
+from taggers.ngram import _fix_yor_aspect, DATA_DIR, MODEL_DIR
+
+# ─── Türkçe fonetik sabitleri ─────────────────────────────────────────────────
+
+_VOWELS        = set("aeıioöuüAEIİOÖUÜ")
+_FRONT_VOWELS  = set("eiöüEİÖÜ")
+_BACK_VOWELS   = set("aıouAIOU")
+_ROUNDED       = set("ouöüOUÖÜ")
+
+_MORPHEME_FLAGS: List[Tuple[str, re.Pattern]] = [
+    ("yor",   re.compile(r"[ıiuü]yor$",          re.I)),
+    ("mış",   re.compile(r"m[ıiuü]ş$",           re.I)),
+    ("acak",  re.compile(r"[ae]cak$",             re.I)),
+    ("malı",  re.compile(r"m[ae]l[ıi]$",         re.I)),
+    ("dı",    re.compile(r"[dt][ıiuü]$",         re.I)),
+    ("ıl",    re.compile(r"[ıiuü]l[ıiuü]?$",    re.I)),
+    ("ın",    re.compile(r"[ıiuü]n[ıiuü]?$",    re.I)),
+    ("tır",   re.compile(r"[dt][ıiuü]r$",        re.I)),
+    ("ken",   re.compile(r"ken$",                 re.I)),
+    ("arak",  re.compile(r"[ae]r?[ae]k$",         re.I)),
+    ("ince",  re.compile(r"[ıi]nce$",             re.I)),
+    ("dığı",  re.compile(r"d[ıi][gğ][ıi]$",     re.I)),
+    ("acağı", re.compile(r"[ae]c[ae][gğ][ıi]$", re.I)),
+    ("mak",   re.compile(r"m[ae]k$",              re.I)),
+    ("dır",   re.compile(r"d[ıi]r$",              re.I)),
+    ("lar",   re.compile(r"l[ae]r$",              re.I)),
+    ("da",    re.compile(r"[dt][ae]$",             re.I)),
+    ("dan",   re.compile(r"[dt][ae]n$",            re.I)),
+    ("ya",    re.compile(r"[ıiuü]?[iye][ae]$",   re.I)),
+    ("yı",    re.compile(r"[ıiuü]$",              re.I)),
+    ("sa",    re.compile(r"[ae]$",                re.I)),
+]
+
+NONE_LABEL = "NONE"
+
+
+def _last_vowel(word: str) -> str:
+    for ch in reversed(word):
+        if ch in _VOWELS:
+            return ch.lower()
+    return ""
+
+
+def _vowel_class(word: str) -> str:
+    lv = _last_vowel(word)
+    if lv in _FRONT_VOWELS: return "front"
+    if lv in _BACK_VOWELS:  return "back"
+    return "none"
+
+
+def _rounded_class(word: str) -> str:
+    return "rounded" if _last_vowel(word) in _ROUNDED else "unrounded"
+
+
+def _len_class(word: str) -> str:
+    n = sum(1 for c in word if c in _VOWELS)
+    return "mono" if n <= 1 else ("bi" if n == 2 else "multi")
+
+
+# ─── Özellik çıkarımı ─────────────────────────────────────────────────────────
+
+def _word_feats(word: str, prefix: str) -> Dict[str, object]:
+    wl = word.lower()
+    d: Dict[str, object] = {}
+    d[f"{prefix}isupper"]      = word.isupper()
+    d[f"{prefix}istitle"]      = word.istitle()
+    d[f"{prefix}isdigit"]      = word.isdigit()
+    d[f"{prefix}hasapos"]      = "'" in word
+    d[f"{prefix}ispunct"]      = not any(c.isalpha() or c.isdigit() for c in word)
+    d[f"{prefix}len_class"]    = _len_class(word)
+    for n in range(1, 6):
+        d[f"{prefix}suf{n}"] = wl[-n:] if len(wl) >= n else wl
+    for n in range(1, 4):
+        d[f"{prefix}pre{n}"] = wl[:n] if len(wl) >= n else wl
+    d[f"{prefix}vowel_class"]   = _vowel_class(word)
+    d[f"{prefix}rounded_class"] = _rounded_class(word)
+    d[f"{prefix}last_vowel"]    = _last_vowel(word)
+    for flag_name, pattern in _MORPHEME_FLAGS:
+        if pattern.search(wl):
+            d[f"{prefix}flag.{flag_name}"] = True
+    return d
+
+
+def word2features(sent: List[str], i: int) -> Dict[str, object]:
+    features: Dict[str, object] = {"bias": 1.0}
+    features.update(_word_feats(sent[i], ""))
+    if i > 0:
+        features.update(_word_feats(sent[i - 1], "-1:"))
+    else:
+        features["BOS"] = True
+    if i < len(sent) - 1:
+        features.update(_word_feats(sent[i + 1], "+1:"))
+    else:
+        features["EOS"] = True
+    return features
+
+
+def sent2features(sent: List[str]) -> List[Dict]:
+    return [word2features(sent, i) for i in range(len(sent))]
+
+
+# ─── FEATS ayrıştırma ─────────────────────────────────────────────────────────
+
+def feats_to_dict(feats_str: str) -> Dict[str, str]:
+    """'Aspect=Prog|Mood=Ind|...' → {'Aspect': 'Prog', 'Mood': 'Ind', ...}"""
+    if feats_str in ("_", "NONE", ""):
+        return {}
+    result = {}
+    for kv in feats_str.split("|"):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            result[k] = v
+    return result
+
+
+def dict_to_feats(d: Dict[str, str]) -> str:
+    """{'Aspect': 'Prog', 'Mood': 'Ind'} → 'Aspect=Prog|Mood=Ind' (sıralı)"""
+    pairs = [f"{k}={v}" for k, v in sorted(d.items()) if v != NONE_LABEL]
+    return "|".join(pairs) if pairs else "NONE"
+
+
+# ─── Veri okuma ───────────────────────────────────────────────────────────────
+
+def _load_conllu(path: Path) -> List[Tuple[List[str], List[str]]]:
+    """[(token_list, feats_list), ...] döner. _fix_yor_aspect normalizasyonu dahil."""
+    sentences = []
+    for sent in _read_conllu(path):
+        tokens = [tok.form for tok in sent.tokens]
+        feats  = []
+        for tok in sent.tokens:
+            f = _parse_feats(tok.feats_raw, reduced=False)
+            f = _fix_yor_aspect(tok.form, f)
+            feats.append(f)
+        sentences.append((tokens, feats))
+    return sentences
+
+
+# ─── Per-Feature CRF Tagger ───────────────────────────────────────────────────
+
+class FactorizedCRFTagger:
+    """
+    Her morfolojik özellik boyutu için ayrı CRF eğitir.
+    1648 tam etiket yerine max ~9 etiket/CRF → pratik eğitim süresi.
+
+    eval.py arayüzü: decode_viterbi(tokens) → [(word, feats_str), ...]
+    """
+
+    def __init__(self, c: float = 0.1, max_iterations: int = 50,
+                 min_feat_count: int = 10):
+        self.c = c
+        self.max_iterations = max_iterations
+        self.min_feat_count = min_feat_count
+        self.crfs: Dict[str, sklearn_crfsuite.CRF] = {}
+        self.dimensions: List[str] = []
+
+    # ── Eğitim ──────────────────────────────────────────────────────────────
+
+    def fit(self, train_sentences: List[Tuple[List[str], List[str]]]) -> None:
+        """Her boyut için ayrı CRF eğit."""
+        print("  [CRF] Özellik vektörleri çıkarılıyor...")
+        X = [sent2features(toks) for toks, _ in train_sentences]
+
+        # Hangi boyutların yeterli verisi var?
+        dim_counts: Dict[str, int] = defaultdict(int)
+        for _, feats_list in train_sentences:
+            for feats_str in feats_list:
+                for k in feats_to_dict(feats_str):
+                    dim_counts[k] += 1
+
+        self.dimensions = sorted(
+            k for k, cnt in dim_counts.items() if cnt >= self.min_feat_count
+        )
+        print(f"  [CRF] {len(self.dimensions)} boyut: {', '.join(self.dimensions)}")
+
+        for dim in self.dimensions:
+            y = self._extract_dim_labels(train_sentences, dim)
+            unique = set(lbl for seq in y for lbl in seq)
+            crf = sklearn_crfsuite.CRF(
+                algorithm="pa",
+                pa_type=1,
+                c=self.c,
+                max_iterations=self.max_iterations,
+                all_possible_transitions=False,
+            )
+            crf.fit(X, y)
+            self.crfs[dim] = crf
+            print(f"    {dim:<20} {len(unique)} etiket  ✓")
+
+    def _extract_dim_labels(
+        self,
+        sentences: List[Tuple[List[str], List[str]]],
+        dim: str,
+    ) -> List[List[str]]:
+        result = []
+        for _, feats_list in sentences:
+            labels = []
+            for feats_str in feats_list:
+                d = feats_to_dict(feats_str)
+                labels.append(d.get(dim, NONE_LABEL))
+            result.append(labels)
+        return result
+
+    # ── Tahmin ──────────────────────────────────────────────────────────────
+
+    def predict(self, tokens: List[str]) -> List[str]:
+        """Token listesinden FEATS string listesi döner."""
+        X = [sent2features(tokens)]
+        # Her boyut için tahmin
+        dim_preds: Dict[str, List[str]] = {}
+        for dim, crf in self.crfs.items():
+            dim_preds[dim] = crf.predict(X)[0]
+
+        # Boyutları birleştir
+        result = []
+        for i in range(len(tokens)):
+            d = {dim: dim_preds[dim][i] for dim in self.dimensions
+                 if dim_preds[dim][i] != NONE_LABEL}
+            result.append(dict_to_feats(d))
+        return result
+
+    def decode_viterbi(self, tokens: List[str]) -> List[Tuple[str, str]]:
+        """eval.py uyumlu arayüz."""
+        return list(zip(tokens, self.predict(tokens)))
+
+    def decode_greedy(self, tokens: List[str]) -> List[Tuple[str, str]]:
+        return self.decode_viterbi(tokens)
+
+    # ── Kaydet / Yükle ──────────────────────────────────────────────────────
+
+    def save(self, path: Path) -> None:
+        MODEL_DIR.mkdir(exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"  [kayıt] {path}  ({path.stat().st_size / 1024:.0f} KB)")
+
+    @classmethod
+    def load(cls, path: Path) -> "FactorizedCRFTagger":
+        import taggers.crf as _crf_module
+
+        class _Unpickler(pickle.Unpickler):
+            """__main__ ile kaydedilmiş pkl'leri taggers.crf'e yönlendir."""
+            def find_class(self, module: str, name: str):
+                if module == "__main__":
+                    module = "taggers.crf"
+                return super().find_class(module, name)
+
+        with open(path, "rb") as f:
+            return _Unpickler(f).load()
+
+
+# ─── Değerlendirme ────────────────────────────────────────────────────────────
+
+def evaluate_crf(model: FactorizedCRFTagger,
+                 sentences: List[Tuple[List[str], List[str]]],
+                 max_sents: Optional[int] = None) -> Dict:
+    """FEATS exact + per-feature accuracy döner."""
+    data = sentences[:max_sents] if max_sents else sentences
+    feats_ok = feats_total = 0
+    per_feat: Dict[str, Dict[str, int]] = defaultdict(lambda: {"correct": 0, "total": 0})
+
+    for tokens, gold_feats in data:
+        pred_feats = model.predict(tokens)
+        for gold, pred in zip(gold_feats, pred_feats):
+            feats_total += 1
+            if gold == pred:
+                feats_ok += 1
+            gold_pairs = set(gold.split("|")) if gold not in ("_", "NONE") else set()
+            pred_pairs = set(pred.split("|")) if pred not in ("_", "NONE") else set()
+            for kv in gold_pairs:
+                k = kv.split("=")[0]
+                per_feat[k]["total"] += 1
+                if kv in pred_pairs:
+                    per_feat[k]["correct"] += 1
+
+    return {
+        "feats_exact": feats_ok / feats_total if feats_total else 0,
+        "per_feature": {
+            k: v["correct"] / v["total"]
+            for k, v in per_feat.items() if v["total"] >= 5
+        },
+    }
+
+
+def print_results(res: Dict, label: str = "CRF") -> None:
+    print(f"\n  [{label}] FEATS exact: {res['feats_exact']*100:.2f}%")
+    print("  Per-feature accuracy:")
+    for feat, acc in sorted(res["per_feature"].items(), key=lambda x: -x[1]):
+        print(f"    {feat:<20} {acc*100:.2f}%")
+
+
+# ─── c grid search ────────────────────────────────────────────────────────────
+
+def tune_crf(train_sents, dev_sents,
+             c_grid=(0.01, 0.05, 0.1, 0.25, 0.5),
+             max_iterations: int = 30) -> float:
+    best_acc, best_c = -1.0, 0.1
+    print(f"\n[tune] {len(c_grid)} c değeri test ediliyor...")
+    for c in c_grid:
+        tagger = FactorizedCRFTagger(c=c, max_iterations=max_iterations)
+        tagger.fit(train_sents)
+        res = evaluate_crf(tagger, dev_sents)
+        acc = res["feats_exact"]
+        print(f"  c={c:.4f}  → FEATS={acc*100:.2f}%")
+        if acc > best_acc:
+            best_acc, best_c = acc, c
+    print(f"  → En iyi: c={best_c}  FEATS={best_acc*100:.2f}%")
+    return best_c
+
+
+# ─── Ana akış ─────────────────────────────────────────────────────────────────
+
+def run_crf(tune: bool = False, max_iter: int = 50) -> FactorizedCRFTagger:
+    train_path = DATA_DIR / "tr_boun-ud-train.conllu"
+    dev_path   = DATA_DIR / "tr_boun-ud-dev.conllu"
+
+    print("[CRF] Veri yükleniyor...")
+    train_sents = _load_conllu(train_path)
+    dev_sents   = _load_conllu(dev_path)
+    print(f"  Train: {len(train_sents)} cümle | Dev: {len(dev_sents)} cümle")
+
+    c = 0.1
+    if tune:
+        c = tune_crf(train_sents, dev_sents, max_iterations=max(10, max_iter // 5))
+
+    print(f"\n[CRF] Per-feature eğitim  (c={c}, max_iter={max_iter})...")
+    tagger = FactorizedCRFTagger(c=c, max_iterations=max_iter)
+    tagger.fit(train_sents)
+
+    print("\n[CRF] Dev değerlendirmesi...")
+    res = evaluate_crf(tagger, dev_sents)
+    print_results(res)
+
+    save_path = MODEL_DIR / "model_crf.pkl"
+    tagger.save(save_path)
+    return tagger
+
+
+# ─── Stacked CRF ─────────────────────────────────────────────────────────────
+
+def sent2features_stacked(
+    sent: List[str],
+    base_preds: List[str],
+) -> List[Dict]:
+    """word2features + HybridLM soft prediction features (bağlam dahil)."""
+    base_dicts = [feats_to_dict(p) for p in base_preds]
+    result = []
+    for i in range(len(sent)):
+        feats = word2features(sent, i)
+        for k, v in base_dicts[i].items():
+            feats[f"base_{k}"] = v
+        if i > 0:
+            for k, v in base_dicts[i - 1].items():
+                feats[f"-1:base_{k}"] = v
+        if i < len(sent) - 1:
+            for k, v in base_dicts[i + 1].items():
+                feats[f"+1:base_{k}"] = v
+        result.append(feats)
+    return result
+
+
+class StackedCRFTagger(FactorizedCRFTagger):
+    """
+    HybridLM tahminlerini CRF feature olarak kullanan yığınlı model.
+    Baz modelin per-token FEATS tahminleri (±1 bağlam dahil) CRF'e ek
+    özellik olarak verilir; CRF bu sinyali düzeltmeyi/güçlendirmeyi öğrenir.
+    """
+
+    def __init__(self, base_model, **kwargs):
+        super().__init__(**kwargs)
+        self.base_model = base_model
+
+    def _base_preds(self, tokens: List[str]) -> List[str]:
+        return [feats for _, feats in self.base_model.decode_viterbi(tokens)]
+
+    def fit(self, train_sentences: List[Tuple[List[str], List[str]]]) -> None:
+        print("  [Stacked] HybridLM tahminleri hesaplanıyor...")
+        X = []
+        for toks, _ in train_sentences:
+            bp = self._base_preds(toks)
+            X.append(sent2features_stacked(toks, bp))
+
+        dim_counts: Dict[str, int] = defaultdict(int)
+        for _, feats_list in train_sentences:
+            for feats_str in feats_list:
+                for k in feats_to_dict(feats_str):
+                    dim_counts[k] += 1
+
+        self.dimensions = sorted(
+            k for k, cnt in dim_counts.items() if cnt >= self.min_feat_count
+        )
+        print(f"  [CRF] {len(self.dimensions)} boyut: {', '.join(self.dimensions)}")
+
+        for dim in self.dimensions:
+            y = self._extract_dim_labels(train_sentences, dim)
+            unique = set(lbl for seq in y for lbl in seq)
+            crf = sklearn_crfsuite.CRF(
+                algorithm="pa",
+                pa_type=1,
+                c=self.c,
+                max_iterations=self.max_iterations,
+                all_possible_transitions=False,
+            )
+            crf.fit(X, y)
+            self.crfs[dim] = crf
+            print(f"    {dim:<20} {len(unique)} etiket  ✓")
+
+    def predict(self, tokens: List[str]) -> List[str]:
+        bp = self._base_preds(tokens)
+        X = [sent2features_stacked(tokens, bp)]
+        dim_preds: Dict[str, List[str]] = {}
+        for dim, crf in self.crfs.items():
+            dim_preds[dim] = crf.predict(X)[0]
+        result = []
+        for i in range(len(tokens)):
+            d = {dim: dim_preds[dim][i] for dim in self.dimensions
+                 if dim_preds[dim][i] != NONE_LABEL}
+            result.append(dict_to_feats(d))
+        return result
+
+
+def run_stacked(max_iter: int = 50) -> "StackedCRFTagger":
+    train_path = DATA_DIR / "tr_boun-ud-train.conllu"
+    dev_path   = DATA_DIR / "tr_boun-ud-dev.conllu"
+    base_path  = MODEL_DIR / "model_hybrid.pkl"
+
+    print("[Stacked CRF] Veri yükleniyor...")
+    train_sents = _load_conllu(train_path)
+    dev_sents   = _load_conllu(dev_path)
+    print(f"  Train: {len(train_sents)} cümle | Dev: {len(dev_sents)} cümle")
+
+    print("[Stacked CRF] HybridLM baz model yükleniyor...")
+    from taggers.ngram import load_model as _load_hybrid
+    base_model = _load_hybrid("model_hybrid")
+
+    print(f"\n[Stacked CRF] Per-feature eğitim  (c=0.1, max_iter={max_iter})...")
+    tagger = StackedCRFTagger(base_model=base_model, c=0.1, max_iterations=max_iter)
+    tagger.fit(train_sents)
+
+    print("\n[Stacked CRF] Dev değerlendirmesi...")
+    res = evaluate_crf(tagger, dev_sents)
+    print_results(res, label="Stacked CRF")
+
+    save_path = MODEL_DIR / "model_stacked_crf.pkl"
+    tagger.save(save_path)
+    return tagger
+
+
+# ─── Ensemble Tagger ──────────────────────────────────────────────────────────
+
+class EnsembleTagger:
+    """
+    HybridLM + StackedCRF per-dimension ensemble.
+
+    Karar kuralı:
+      - Anlaşma  → o değeri kullan (yüksek güven)
+      - Anlaşmazlık → PREFER_HYBRID boyutlarında HybridLM, kalanında CRF
+    """
+
+    PREFER_HYBRID: set = {"Voice"}
+
+    def __init__(self, hybrid_model, crf_model):
+        self.hybrid = hybrid_model
+        self.crf = crf_model
+
+    def predict(self, tokens: List[str]) -> List[str]:
+        hybrid_pairs = self.hybrid.decode_viterbi(tokens)
+        crf_feats_list = self.crf.predict(tokens)
+
+        result = []
+        for (_, h_feats), c_feats in zip(hybrid_pairs, crf_feats_list):
+            h_d = feats_to_dict(h_feats)
+            c_d = feats_to_dict(c_feats)
+            all_dims = set(h_d.keys()) | set(c_d.keys())
+            merged = {}
+            for dim in all_dims:
+                h_val = h_d.get(dim)
+                c_val = c_d.get(dim)
+                if h_val == c_val:
+                    if h_val is not None:
+                        merged[dim] = h_val
+                elif h_val is None:
+                    # Sadece CRF görüyor → konservatif: HybridLM'in sessizliğine güven
+                    pass
+                elif c_val is None:
+                    # Sadece HybridLM görüyor → HybridLM'i al
+                    merged[dim] = h_val
+                else:
+                    # Her ikisi de görüyor ama anlaşamıyor → per-dimension kazanan
+                    if dim in self.PREFER_HYBRID:
+                        merged[dim] = h_val
+                    else:
+                        merged[dim] = c_val
+            result.append(dict_to_feats(merged))
+        return result
+
+    def decode_viterbi(self, tokens: List[str]) -> List[Tuple[str, str]]:
+        return list(zip(tokens, self.predict(tokens)))
+
+    def decode_greedy(self, tokens: List[str]) -> List[Tuple[str, str]]:
+        return self.decode_viterbi(tokens)
+
+
+def run_ensemble() -> "EnsembleTagger":
+    dev_path     = DATA_DIR / "tr_boun-ud-dev.conllu"
+    hybrid_path  = MODEL_DIR / "model_hybrid.pkl"
+    stacked_path = MODEL_DIR / "model_stacked_crf.pkl"
+
+    print("[Ensemble] Modeller yükleniyor...")
+    from taggers.ngram import load_model as _load_hybrid
+    hybrid  = _load_hybrid("model_hybrid")
+    stacked = FactorizedCRFTagger.load(stacked_path)
+
+    ensemble = EnsembleTagger(hybrid_model=hybrid, crf_model=stacked)
+
+    print("[Ensemble] Dev değerlendirmesi...")
+    dev_sents = _load_conllu(dev_path)
+    res = evaluate_crf(ensemble, dev_sents)
+    print_results(res, label="Ensemble")
+
+    # Karşılaştırma için HybridLM tek başına
+    class _HWrap:
+        def __init__(self, m): self.m = m
+        def predict(self, t): return [f for _, f in self.m.decode_viterbi(t)]
+    res_h = evaluate_crf(_HWrap(hybrid), dev_sents)
+    print_results(res_h, label="HybridLM baseline")
+    return ensemble
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Per-Feature CRF Türkçe Morfoloji Tagger")
+    parser.add_argument("--stacked",  action="store_true",
+                        help="Stacked model: HybridLM tahminlerini feature olarak kullan")
+    parser.add_argument("--ensemble", action="store_true",
+                        help="Ensemble: HybridLM + StackedCRF per-dimension birleştir")
+    parser.add_argument("--tune",     action="store_true", help="c grid search yap")
+    parser.add_argument("--max-iter", type=int, default=50,
+                        help="PA iterasyon sayısı (default: 50)")
+    args = parser.parse_args()
+    if args.ensemble:
+        run_ensemble()
+    elif args.stacked:
+        run_stacked(max_iter=args.max_iter)
+    else:
+        run_crf(tune=args.tune, max_iter=args.max_iter)
+

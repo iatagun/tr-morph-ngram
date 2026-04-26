@@ -1,0 +1,4 @@
+sklearn-crfsuite
+numpy
+scipy
+scikit-learn

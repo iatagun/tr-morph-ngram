@@ -18,10 +18,10 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
-import dep_parser as _dep_parser
+from taggers import dep as _dep_parser
 
 from data.conllu import read_conllu as _read_conllu
-from trigram_morph import (
+from taggers.ngram import (
     load_model,
     parse_feats,
     heuristic_candidates,
@@ -36,7 +36,7 @@ from trigram_morph import (
     DATA_DIR,
     BOS1, BOS2,
 )
-from unigram_morph import UnigramLM
+from taggers.unigram import UnigramLM
 
 
 def load_orchestrator() -> OrchestratorLM:
@@ -289,7 +289,7 @@ def main():
     elif args.model == "orch":
         model = load_orchestrator()
     else:
-        from trigram_morph import load_model as _load
+        from taggers.ngram import load_model as _load
         model = _load(model_name)
     print(" OK")
 

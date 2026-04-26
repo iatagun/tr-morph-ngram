@@ -20,8 +20,8 @@ from typing import Dict, List, Optional, Tuple
 
 from data.conllu import read_conllu as _read_conllu
 
-DATA_DIR   = Path(__file__).parent / "data"
-MODELS_DIR = Path(__file__).parent / "models"
+DATA_DIR   = Path(__file__).parent.parent / "data"
+MODELS_DIR = Path(__file__).parent.parent / "models"
 
 # ─── Geçiş sabitleri ──────────────────────────────────────────────────────────
 

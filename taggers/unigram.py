@@ -16,7 +16,7 @@ from collections import defaultdict, Counter
 from pathlib import Path
 from typing import List
 
-from trigram_morph import (
+from taggers.ngram import (
     parse_feats,
     heuristic_candidates_weighted,
     DATA_DIR,
@@ -100,12 +100,12 @@ class UnigramLM:
                 f"Önce 'python unigram_morph.py' çalıştırın."
             )
 
-        import unigram_morph as _um
+        import taggers.unigram as _um
 
         class _Unpickler(pickle.Unpickler):
             def find_class(self, module, classname):
-                if module == "__main__":
-                    module = "unigram_morph"
+                if module in ("__main__", "unigram_morph"):
+                    module = "taggers.unigram"
                 return super().find_class(module, classname)
 
         with open(path, "rb") as f:

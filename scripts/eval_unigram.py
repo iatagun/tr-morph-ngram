@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from collections import defaultdict, Counter
 
-from trigram_morph import (
+from taggers.ngram import (
     load_model, parse_feats,
     heuristic_candidates_weighted,
     viterbi_decode,
