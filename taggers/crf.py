@@ -100,6 +100,52 @@ _MOOD_FLAGS: List[Tuple[str, re.Pattern]] = [
     # (bu negatif sinyal; zaten diğerleri yoksa Ind çıkar)
 ]
 
+# ─── Zamir kökü → PronType eşlemesi ─────────────────────────────────────────
+# Türkçe zamirler kapalı bir sınıf; kökleri tanırsak PronType büyük ölçüde çözülür.
+# "o/bu/şu/ne" çok kısa → yanlış prefix eşleşmesi olur, direkt form tablosuna alındı.
+
+_PRONOUN_ROOTS: List[Tuple[str, str]] = [
+    # uzundan kısaya sıralandı (prefix eşleşmesi için)
+    ("hiçbiri", "Neg"),   ("birileri", "Ind"),  ("birisi",  "Ind"),
+    ("herkes",  "Tot"),   ("şunlar",   "Dem"),  ("bunlar",  "Dem"),
+    ("onlar",   "Prs"),   ("birkaç",   "Ind"),  ("bütün",   "Tot"),
+    ("hangi",   "Int"),   ("kendi",    "Rfl"),  ("kimse",   "Neg"),
+    ("hepsi",   "Tot"),   ("hepim",    "Tot"),  ("bazı",    "Ind"),
+    ("biri",    "Ind"),   ("tüm",      "Tot"),  ("her",     "Tot"),
+    ("ben",     "Prs"),   ("sen",      "Prs"),  ("biz",     "Prs"),
+    ("siz",     "Prs"),   ("kim",      "Int"),  ("kaç",     "Int"),
+    ("hiç",     "Neg"),
+]
+
+# Kısa ve çok anlamlı zamirler için olası çekim formları
+_SHORT_PRON: Dict[str, str] = {}
+for _stem, _ptype in [
+    ("o",   "Prs"),
+    ("bu",  "Dem"),
+    ("şu",  "Dem"),
+]:
+    for _suf in ["", "nu", "na", "nun", "nda", "ndan", "nla", "nlar",
+                 "nları", "nlardan", "nların", "nca"]:
+        _SHORT_PRON[_stem + _suf] = _ptype
+# "ne" düzensiz çekim: neyi, neye, neyin, nede, neden, neyle, nelerden…
+for _f in ["ne", "neyi", "neye", "neyin", "nede", "neden", "neyle",
+           "neler", "neleri", "nelere", "nelerin", "nelerde", "nelerden"]:
+    _SHORT_PRON[_f] = "Int"
+
+
+def _pronoun_type(wl: str) -> Optional[str]:
+    """Sözcüğün zamir türünü döner; yoksa None."""
+    if wl in _SHORT_PRON:
+        return _SHORT_PRON[wl]
+    for root, ptype in _PRONOUN_ROOTS:
+        if wl.startswith(root):
+            rest = wl[len(root):]
+            # Kalan kısım boş ya da Türkçe ek başlangıcıyla uyumlu olmalı
+            if not rest or rest[0] in "aeıioöuüdntsylrkvcç":
+                return ptype
+    return None
+
+
 # ─── Kural-tabanlı ek soyucu ─────────────────────────────────────────────────
 # Türkçe morfoloji analizörünün suffix registry'sinden çıkarılmış bilgi.
 # Şablon: {A}→a/e  {I}→ı/i/u/ü  {D}→d/t  {C}→c/ç
@@ -250,6 +296,10 @@ def _word_feats(word: str, prefix: str) -> Dict[str, object]:
     # Ek zinciri sırası: hangi ek önce/sonra geldi
     if len(morph_labels) >= 2:
         d[f"{prefix}ms.seq"] = "_".join(morph_labels[:2])
+    # Zamir türü
+    pron_type = _pronoun_type(wl)
+    if pron_type:
+        d[f"{prefix}pron.{pron_type}"] = True
     return d
 
 
@@ -557,7 +607,7 @@ def sent2features_stacked(
     data leakage nedeniyle CRF'in kendi öğrendiklerini eziyor.
     """
     if exclude_dims is None:
-        exclude_dims = {"Voice", "Mood"}
+        exclude_dims = {"Voice", "Mood", "PronType"}
     base_dicts = [
         {k: v for k, v in feats_to_dict(p).items() if k not in exclude_dims}
         for p in base_preds
