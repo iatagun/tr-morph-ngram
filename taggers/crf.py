@@ -455,9 +455,20 @@ def run_crf(
 def sent2features_stacked(
     sent: List[str],
     base_preds: List[str],
+    exclude_dims: Optional[set] = None,
 ) -> List[Dict]:
-    """word2features + HybridLM soft prediction features (bağlam dahil)."""
-    base_dicts = [feats_to_dict(p) for p in base_preds]
+    """word2features + HybridLM soft prediction features (bağlam dahil).
+
+    exclude_dims: HybridLM'in güvenilmez olduğu boyutları hariç tut.
+    Varsayılan olarak Voice ve Mood hariç tutulur — bu boyutlarda HybridLM
+    data leakage nedeniyle CRF'in kendi öğrendiklerini eziyor.
+    """
+    if exclude_dims is None:
+        exclude_dims = {"Voice", "Mood"}
+    base_dicts = [
+        {k: v for k, v in feats_to_dict(p).items() if k not in exclude_dims}
+        for p in base_preds
+    ]
     result = []
     for i in range(len(sent)):
         feats = word2features(sent, i)
