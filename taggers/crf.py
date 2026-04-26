@@ -106,15 +106,48 @@ _MOOD_FLAGS: List[Tuple[str, re.Pattern]] = [
 
 _PRONOUN_ROOTS: List[Tuple[str, str]] = [
     # uzundan kısaya sıralandı (prefix eşleşmesi için)
-    ("hiçbiri", "Neg"),   ("birileri", "Ind"),  ("birisi",  "Ind"),
-    ("herkes",  "Tot"),   ("şunlar",   "Dem"),  ("bunlar",  "Dem"),
-    ("onlar",   "Prs"),   ("birkaç",   "Ind"),  ("bütün",   "Tot"),
-    ("hangi",   "Int"),   ("kendi",    "Rfl"),  ("kimse",   "Neg"),
-    ("hepsi",   "Tot"),   ("hepim",    "Tot"),  ("bazı",    "Ind"),
-    ("biri",    "Ind"),   ("tüm",      "Tot"),  ("her",     "Tot"),
-    ("ben",     "Prs"),   ("sen",      "Prs"),  ("biz",     "Prs"),
-    ("siz",     "Prs"),   ("kim",      "Int"),  ("kaç",     "Int"),
-    ("hiç",     "Neg"),
+    ("hiçbirini", "Neg"),  ("hiçbirine", "Neg"),  ("hiçbirinde","Neg"),
+    ("hiçbirinden","Neg"), ("hiçbirleri","Neg"),
+    ("birileri",  "Ind"),  ("birbirini", "Rfl"),  ("birbirine", "Rfl"),
+    ("birbirinde","Rfl"),  ("birbirinden","Rfl"),
+    ("hiçbiri",   "Neg"),  ("birbirler", "Rfl"),  ("birbirleri","Rfl"),
+    ("hepimizi",  "Tot"),  ("hepimize",  "Tot"),  ("hepimizde", "Tot"),
+    ("hepimizden","Tot"),  ("hepinizi",  "Tot"),  ("hepinize",  "Tot"),
+    ("hepinizden","Tot"),  ("hepinizde", "Tot"),
+    ("herkesin",  "Tot"),  ("herkese",   "Tot"),  ("herkeste",  "Tot"),
+    ("herkesten", "Tot"),  ("herkesi",   "Tot"),
+    ("kendileri", "Rfl"),  ("kendinizi", "Rfl"),  ("kendinize", "Rfl"),
+    ("kendinizde","Rfl"),  ("kendinizden","Rfl"),  ("kendimizi", "Rfl"),
+    ("kendimize", "Rfl"),  ("kendimizden","Rfl"),
+    ("kendisini", "Rfl"),  ("kendisine", "Rfl"),  ("kendisinde","Rfl"),
+    ("kendisinden","Rfl"), ("kendiniz",  "Rfl"),  ("kendimiz",  "Rfl"),
+    ("kendisi",   "Rfl"),  ("kendini",   "Rfl"),  ("kendine",   "Rfl"),
+    ("kendinde",  "Rfl"),  ("kendinden", "Rfl"),
+    ("tümünü",    "Tot"),  ("tümüne",    "Tot"),  ("tümünde",   "Tot"),
+    ("tümünden",  "Tot"),  ("tümünün",   "Tot"),  ("tümü",      "Tot"),
+    ("herhangi",  "Ind"),  ("herşeyi",   "Tot"),  ("herşeye",   "Tot"),
+    ("herşeyde",  "Tot"),  ("herşeyden", "Tot"),  ("herşeyin",  "Tot"),
+    ("herşey",    "Tot"),
+    ("şunlar",    "Dem"),  ("bunlar",    "Dem"),  ("onlar",     "Prs"),
+    ("birkaç",    "Ind"),  ("bütünü",    "Tot"),  ("bütüne",    "Tot"),
+    ("bütünde",   "Tot"),  ("bütünden",  "Tot"),  ("bütün",     "Tot"),
+    ("hangi",     "Int"),  ("herkes",    "Tot"),  ("kimse",     "Neg"),
+    ("hepsini",   "Tot"),  ("hepsine",   "Tot"),  ("hepsinde",  "Tot"),
+    ("hepsinden", "Tot"),  ("hepsinin",  "Tot"),
+    ("hepimiz",   "Tot"),  ("hepiniz",   "Tot"),  ("hepsi",     "Tot"),
+    ("hepim",     "Tot"),  ("hepin",     "Tot"),
+    ("bazısı",    "Ind"),  ("bazıları",  "Ind"),  ("bazısını",  "Ind"),
+    ("bazı",      "Ind"),  ("birisi",    "Ind"),  ("biri",      "Ind"),
+    ("tüm",       "Tot"),
+    ("kendi",     "Rfl"),
+    ("kendim",    "Rfl"),  ("kendin",    "Rfl"),
+    ("öbürü",     "Dem"),  ("öteki",     "Dem"),  ("öbürünü",   "Dem"),
+    ("böyle",     "Dem"),  ("şöyle",     "Dem"),  ("öyle",      "Dem"),
+    ("birbirle",  "Rfl"),
+    ("ben",       "Prs"),  ("sen",       "Prs"),  ("biz",       "Prs"),
+    ("siz",       "Prs"),  ("kim",       "Int"),  ("kaç",       "Int"),
+    ("hiç",       "Neg"),  ("nasıl",     "Int"),  ("niçin",     "Int"),
+    ("niye",      "Int"),  ("hangi",     "Int"),
 ]
 
 # Kısa ve çok anlamlı zamirler için olası çekim formları
@@ -125,12 +158,20 @@ for _stem, _ptype in [
     ("şu",  "Dem"),
 ]:
     for _suf in ["", "nu", "na", "nun", "nda", "ndan", "nla", "nlar",
-                 "nları", "nlardan", "nların", "nca"]:
+                 "nları", "nlardan", "nların", "nca", "nunla", "nunki",
+                 "nunkine", "nunkini", "nundan"]:
         _SHORT_PRON[_stem + _suf] = _ptype
-# "ne" düzensiz çekim: neyi, neye, neyin, nede, neden, neyle, nelerden…
+# "ne" düzensiz çekim
 for _f in ["ne", "neyi", "neye", "neyin", "nede", "neden", "neyle",
-           "neler", "neleri", "nelere", "nelerin", "nelerde", "nelerden"]:
+           "neler", "neleri", "nelere", "nelerin", "nelerde", "nelerden",
+           "nereye", "nerede", "nereden", "neresi", "nereyi", "nereye",
+           "nereye", "neredeyse", "neredesin", "nerelerde", "nerelere",
+           "nerelisin", "nereye", "nereden"]:
     _SHORT_PRON[_f] = "Int"
+# "her" ve "tüm" exact-match: çok anlamlı kısa kökler
+for _f in ["her", "tüm", "tümü", "tümünü", "tümüne", "tümünde", "tümünden", "tümünün"]:
+    if _f not in _SHORT_PRON:
+        _SHORT_PRON[_f] = "Tot"
 
 
 def _pronoun_type(wl: str) -> Optional[str]:
@@ -140,8 +181,11 @@ def _pronoun_type(wl: str) -> Optional[str]:
     for root, ptype in _PRONOUN_ROOTS:
         if wl.startswith(root):
             rest = wl[len(root):]
-            # Kalan kısım boş ya da Türkçe ek başlangıcıyla uyumlu olmalı
-            if not rest or rest[0] in "aeıioöuüdntsylrkvcç":
+            if not rest:
+                return ptype
+            # her/tüm gibi çok anlamlı kısa kökler: exact-match only (yukarıda)
+            # Diğer kökler: standart Türkçe ek-başı karakter kümesi
+            if rest[0] in "aeıioöuüdtnlsyrkvcçmzşğbpfh":
                 return ptype
     return None
 
