@@ -173,13 +173,42 @@ class FactorizedCRFTagger:
     eval.py arayüzü: decode_viterbi(tokens) → [(word, feats_str), ...]
     """
 
-    def __init__(self, c: float = 0.1, max_iterations: int = 50,
-                 min_feat_count: int = 10):
+    def __init__(
+        self,
+        algorithm: str = "pa",   # "pa" veya "lbfgs"
+        c: float = 0.1,          # PA agresiflik katsayısı
+        c1: float = 0.1,         # L-BFGS L1 düzenlileştirme
+        c2: float = 0.1,         # L-BFGS L2 düzenlileştirme
+        max_iterations: int = 50,
+        min_feat_count: int = 10,
+    ):
+        self.algorithm = algorithm
         self.c = c
+        self.c1 = c1
+        self.c2 = c2
         self.max_iterations = max_iterations
         self.min_feat_count = min_feat_count
         self.crfs: Dict[str, sklearn_crfsuite.CRF] = {}
         self.dimensions: List[str] = []
+
+    def _make_crf(self) -> sklearn_crfsuite.CRF:
+        """Seçili algoritmaya göre CRF nesnesi oluştur."""
+        if self.algorithm == "lbfgs":
+            return sklearn_crfsuite.CRF(
+                algorithm="lbfgs",
+                c1=self.c1,
+                c2=self.c2,
+                max_iterations=self.max_iterations,
+                all_possible_transitions=True,
+            )
+        # pa (varsayılan)
+        return sklearn_crfsuite.CRF(
+            algorithm="pa",
+            pa_type=1,
+            c=self.c,
+            max_iterations=self.max_iterations,
+            all_possible_transitions=False,
+        )
 
     # ── Eğitim ──────────────────────────────────────────────────────────────
 
@@ -203,13 +232,7 @@ class FactorizedCRFTagger:
         for dim in self.dimensions:
             y = self._extract_dim_labels(train_sentences, dim)
             unique = set(lbl for seq in y for lbl in seq)
-            crf = sklearn_crfsuite.CRF(
-                algorithm="pa",
-                pa_type=1,
-                c=self.c,
-                max_iterations=self.max_iterations,
-                all_possible_transitions=False,
-            )
+            crf = self._make_crf()
             crf.fit(X, y)
             self.crfs[dim] = crf
             print(f"    {dim:<20} {len(unique)} etiket  ✓")
@@ -337,7 +360,14 @@ def tune_crf(train_sents, dev_sents,
 
 # ─── Ana akış ─────────────────────────────────────────────────────────────────
 
-def run_crf(tune: bool = False, max_iter: int = 50) -> FactorizedCRFTagger:
+def run_crf(
+    tune: bool = False,
+    max_iter: int = 100,
+    algo: str = "lbfgs",
+    c1: float = 0.1,
+    c2: float = 0.1,
+    c: float = 0.1,
+) -> FactorizedCRFTagger:
     train_path = DATA_DIR / "tr_boun-ud-train.conllu"
     dev_path   = DATA_DIR / "tr_boun-ud-dev.conllu"
 
@@ -346,19 +376,25 @@ def run_crf(tune: bool = False, max_iter: int = 50) -> FactorizedCRFTagger:
     dev_sents   = _load_conllu(dev_path)
     print(f"  Train: {len(train_sents)} cümle | Dev: {len(dev_sents)} cümle")
 
-    c = 0.1
-    if tune:
+    if tune and algo == "pa":
         c = tune_crf(train_sents, dev_sents, max_iterations=max(10, max_iter // 5))
 
-    print(f"\n[CRF] Per-feature eğitim  (c={c}, max_iter={max_iter})...")
-    tagger = FactorizedCRFTagger(c=c, max_iterations=max_iter)
+    if algo == "lbfgs":
+        print(f"\n[CRF] Per-feature eğitim  (lbfgs  c1={c1}  c2={c2}  max_iter={max_iter})...")
+    else:
+        print(f"\n[CRF] Per-feature eğitim  (pa  c={c}  max_iter={max_iter})...")
+
+    tagger = FactorizedCRFTagger(
+        algorithm=algo, c=c, c1=c1, c2=c2, max_iterations=max_iter
+    )
     tagger.fit(train_sents)
 
     print("\n[CRF] Dev değerlendirmesi...")
     res = evaluate_crf(tagger, dev_sents)
     print_results(res)
 
-    save_path = MODEL_DIR / "model_crf.pkl"
+    save_name = f"model_crf_{algo}.pkl"
+    save_path  = MODEL_DIR / save_name
     tagger.save(save_path)
     return tagger
 
@@ -421,13 +457,7 @@ class StackedCRFTagger(FactorizedCRFTagger):
         for dim in self.dimensions:
             y = self._extract_dim_labels(train_sentences, dim)
             unique = set(lbl for seq in y for lbl in seq)
-            crf = sklearn_crfsuite.CRF(
-                algorithm="pa",
-                pa_type=1,
-                c=self.c,
-                max_iterations=self.max_iterations,
-                all_possible_transitions=False,
-            )
+            crf = self._make_crf()
             crf.fit(X, y)
             self.crfs[dim] = crf
             print(f"    {dim:<20} {len(unique)} etiket  ✓")
@@ -446,10 +476,15 @@ class StackedCRFTagger(FactorizedCRFTagger):
         return result
 
 
-def run_stacked(max_iter: int = 50) -> "StackedCRFTagger":
+def run_stacked(
+    max_iter: int = 100,
+    algo: str = "lbfgs",
+    c1: float = 0.1,
+    c2: float = 0.1,
+    c: float = 0.1,
+) -> "StackedCRFTagger":
     train_path = DATA_DIR / "tr_boun-ud-train.conllu"
     dev_path   = DATA_DIR / "tr_boun-ud-dev.conllu"
-    base_path  = MODEL_DIR / "model_hybrid.pkl"
 
     print("[Stacked CRF] Veri yükleniyor...")
     train_sents = _load_conllu(train_path)
@@ -460,15 +495,22 @@ def run_stacked(max_iter: int = 50) -> "StackedCRFTagger":
     from taggers.ngram import load_model as _load_hybrid
     base_model = _load_hybrid("model_hybrid")
 
-    print(f"\n[Stacked CRF] Per-feature eğitim  (c=0.1, max_iter={max_iter})...")
-    tagger = StackedCRFTagger(base_model=base_model, c=0.1, max_iterations=max_iter)
+    if algo == "lbfgs":
+        print(f"\n[Stacked CRF] Per-feature eğitim  (lbfgs  c1={c1}  c2={c2}  max_iter={max_iter})...")
+    else:
+        print(f"\n[Stacked CRF] Per-feature eğitim  (pa  c={c}  max_iter={max_iter})...")
+
+    tagger = StackedCRFTagger(
+        base_model=base_model, algorithm=algo, c=c, c1=c1, c2=c2, max_iterations=max_iter
+    )
     tagger.fit(train_sents)
 
     print("\n[Stacked CRF] Dev değerlendirmesi...")
     res = evaluate_crf(tagger, dev_sents)
     print_results(res, label="Stacked CRF")
 
-    save_path = MODEL_DIR / "model_stacked_crf.pkl"
+    save_name = f"model_stacked_crf_{algo}.pkl"
+    save_path  = MODEL_DIR / save_name
     tagger.save(save_path)
     return tagger
 
@@ -560,14 +602,25 @@ if __name__ == "__main__":
                         help="Stacked model: HybridLM tahminlerini feature olarak kullan")
     parser.add_argument("--ensemble", action="store_true",
                         help="Ensemble: HybridLM + StackedCRF per-dimension birleştir")
-    parser.add_argument("--tune",     action="store_true", help="c grid search yap")
-    parser.add_argument("--max-iter", type=int, default=50,
-                        help="PA iterasyon sayısı (default: 50)")
+    parser.add_argument("--tune",     action="store_true", help="c grid search yap (sadece pa)")
+    parser.add_argument("--algo",     type=str, default="lbfgs", choices=["pa", "lbfgs"],
+                        help="CRF algoritması: 'lbfgs' (L1+L2, önerilen) veya 'pa' (default: lbfgs)")
+    parser.add_argument("--max-iter", type=int, default=100,
+                        help="Maksimum iterasyon sayısı (default: 100)")
+    parser.add_argument("--c",        type=float, default=0.1,
+                        help="PA agresiflik katsayısı (default: 0.1)")
+    parser.add_argument("--c1",       type=float, default=0.1,
+                        help="L-BFGS L1 düzenlileştirme (default: 0.1)")
+    parser.add_argument("--c2",       type=float, default=0.1,
+                        help="L-BFGS L2 düzenlileştirme (default: 0.1)")
     args = parser.parse_args()
+
+    kw = dict(algo=args.algo, max_iter=args.max_iter, c=args.c, c1=args.c1, c2=args.c2)
     if args.ensemble:
         run_ensemble()
     elif args.stacked:
-        run_stacked(max_iter=args.max_iter)
+        run_stacked(**kw)
     else:
-        run_crf(tune=args.tune, max_iter=args.max_iter)
+        run_crf(tune=args.tune, **kw)
+
 
