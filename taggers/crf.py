@@ -59,6 +59,47 @@ _MORPHEME_FLAGS: List[Tuple[str, re.Pattern]] = [
     ("sa",    re.compile(r"[ae]$",                re.I)),
 ]
 
+# ─── Voice: kelime içi (infix) ek kalıpları ───────────────────────────────────
+# Türkçe'de ses/çatı ekleri tense/agreement eklerinin ÖNÜNE gelir;
+# dolayısıyla kelime sonunda değil, ortasında görünürler.
+_VOICE_INFIX_FLAGS: List[Tuple[str, re.Pattern]] = [
+    # Edilgen  -ıl-/-il-/-ul-/-ül-  (yazılıyor, sevildi, görüldü)
+    ("voi_pass_ifx",  re.compile(r"[ıiuü]l[ıiuü]",          re.I)),
+    # Dönüşlü  -ın-/-in-/-un-/-ün-  (yıkanıyor, övünüyor)
+    ("voi_rfl_ifx",   re.compile(r"[ıiuü]n[ıiuü]",          re.I)),
+    # Karşılıklı -ış-/-iş-/-uş-/-üş- (görüşüyor, anlaşıldı)
+    ("voi_rcpr_ifx",  re.compile(r"[ıiuü]ş[ıiuü]",          re.I)),
+    # Ettirgen  -dır-/-dir-/-dur-/-dür-/-tır-... (yazdırıyor, pişirdi)
+    ("voi_cau_ifx",   re.compile(r"[dt][ıiuü]r[ıiuü]",      re.I)),
+    # Ettirgen kısa -t- (sat → sattır, bitir → bitirdi) - sonu ile birlikte
+    ("voi_cau_t",     re.compile(r"[^ıiuü]t[ıiuü]r",        re.I)),
+    # Ettirgen -er-/-ar- (çıkar, çevirir)
+    ("voi_cau_er",    re.compile(r"[ae]r[ıiuü]r$|[ae]rt[ıiuü]$", re.I)),
+]
+
+# ─── Mood: kiplik kalıpları ───────────────────────────────────────────────────
+_MOOD_FLAGS: List[Tuple[str, re.Pattern]] = [
+    # İhtimal (Potential) -ebil-/-abil-  (gelebilir, yapabildi)
+    ("moo_pot",       re.compile(r"[ae]bil",                  re.I)),
+    # İmkansızlık -eme-/-ama-  (gelemiyor, yapamadı)
+    ("moo_neg_pot",   re.compile(r"[ae]m[ae]",                re.I)),
+    # Koşul (Conditional) -se/-sa kelime sonunda
+    ("moo_cnd",       re.compile(r"s[ae]$",                   re.I)),
+    # Koşul geçmiş -seydı/-saydı
+    ("moo_cnd_past",  re.compile(r"s[ae][yd][ıiuü]$",        re.I)),
+    # Zorunluluk (Necessitative) -meli/-malı
+    ("moo_nec",       re.compile(r"m[ae]l[ıi]",               re.I)),
+    # Emir 3. tekil -sın/-sin/-sun/-sün
+    ("moo_imp3sg",    re.compile(r"s[ıiuü]n$",                re.I)),
+    # Emir 3. çoğul -sınlar/-sinler
+    ("moo_imp3pl",    re.compile(r"s[ıiuü]nl[ae]r$",          re.I)),
+    # İstek (Optative) -eyim/-ayım 1sg, -elim/-alım 1pl
+    ("moo_opt1sg",    re.compile(r"[ae]y[ıi]m$",              re.I)),
+    ("moo_opt1pl",    re.compile(r"[ae]l[ıi]m$",              re.I)),
+    # Şart eki olmayan ama -yor olmayan geniş zaman → Ind varsayılan
+    # (bu negatif sinyal; zaten diğerleri yoksa Ind çıkar)
+]
+
 NONE_LABEL = "NONE"
 
 
@@ -96,14 +137,24 @@ def _word_feats(word: str, prefix: str) -> Dict[str, object]:
     d[f"{prefix}hasapos"]      = "'" in word
     d[f"{prefix}ispunct"]      = not any(c.isalpha() or c.isdigit() for c in word)
     d[f"{prefix}len_class"]    = _len_class(word)
-    for n in range(1, 6):
+    # Suffix (1-8) ve prefix (1-3)
+    for n in range(1, 9):
         d[f"{prefix}suf{n}"] = wl[-n:] if len(wl) >= n else wl
     for n in range(1, 4):
         d[f"{prefix}pre{n}"] = wl[:n] if len(wl) >= n else wl
     d[f"{prefix}vowel_class"]   = _vowel_class(word)
     d[f"{prefix}rounded_class"] = _rounded_class(word)
     d[f"{prefix}last_vowel"]    = _last_vowel(word)
+    # Genel morfem kalıpları (kelime sonu)
     for flag_name, pattern in _MORPHEME_FLAGS:
+        if pattern.search(wl):
+            d[f"{prefix}flag.{flag_name}"] = True
+    # Voice infix kalıpları (kelime içi çatı ekleri)
+    for flag_name, pattern in _VOICE_INFIX_FLAGS:
+        if pattern.search(wl):
+            d[f"{prefix}flag.{flag_name}"] = True
+    # Mood kalıpları
+    for flag_name, pattern in _MOOD_FLAGS:
         if pattern.search(wl):
             d[f"{prefix}flag.{flag_name}"] = True
     return d
