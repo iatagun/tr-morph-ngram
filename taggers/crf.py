@@ -100,6 +100,92 @@ _MOOD_FLAGS: List[Tuple[str, re.Pattern]] = [
     # (bu negatif sinyal; zaten diğerleri yoksa Ind çıkar)
 ]
 
+# ─── Kural-tabanlı ek soyucu ─────────────────────────────────────────────────
+# Türkçe morfoloji analizörünün suffix registry'sinden çıkarılmış bilgi.
+# Şablon: {A}→a/e  {I}→ı/i/u/ü  {D}→d/t  {C}→c/ç
+# (form, etiket, min_kalan_kök_uzunluğu) — uzun ekler önce
+
+_MORPH_SUFFIX_DEFS: List[Tuple[str, str, int]] = [
+    # Zaman / Kip
+    ("{I}yor",    "PRES",       2),   # şimdiki zaman -ıyor
+    ("m{I}ş",    "EVID_PAST",  2),   # duyulan geçmiş -mış
+    ("{A}c{A}k", "FUT",        2),   # gelecek -acak/-ecek
+    ("{A}bil",   "POT",        2),   # yeterlilik -abil/-ebil
+    ("s{I}nl{A}r","IMP3PL",   2),   # emir 3Ç -sınlar
+    ("{I}nc{A}", "CONV",       2),   # zarf fiil -ınca
+    ("{A}r{A}k", "CONV",       2),   # zarf fiil -arak/-erek
+    ("{D}{I}ğ",  "PART",       2),   # sıfat fiil -dığ/-diğ
+    ("{A}c{A}ğ", "PART",       2),   # sıfat fiil -acağ/-eceğ
+    # Çatı ekleri (VOICE)
+    ("{D}{I}r",  "CAU",        2),   # ettirgen / bildirme -dır/-dir/-tır/-tir
+    ("l{A}t",    "CAU_LAT",    3),   # ettirgen -lat/-let
+    ("{I}l",     "PASS",       3),   # edilgen -ıl/-il/-ul/-ül
+    ("{I}ş",     "RCPR",       3),   # işteş -ış/-iş/-uş/-üş
+    # Kip
+    ("s{A}",     "CND",        2),   # dilek-şart -sa/-se
+    ("m{A}l{I}", "NEC",        2),   # gereklilik -malı/-meli
+    ("s{I}n",    "IMP3SG",     2),   # emir 3T -sın/-sin
+    ("m{A}",     "NEG",        1),   # olumsuzluk -ma/-me
+    # İsim hal ekleri
+    ("{D}{A}n",  "ABL",        2),   # ayrılma -dan/-den/-tan/-ten
+    ("{D}{A}",   "LOC",        2),   # bulunma -da/-de/-ta/-te
+    ("m{A}k",    "INF",        2),   # mastar -mak/-mek
+    ("ken",      "CONV_KEN",   2),   # zarf fiil -ken
+    ("l{A}r",    "PLUR",       2),   # çoğul / kişi-3Ç
+    # Zaman (geç sırala: kısa, çok amaçlı ekler)
+    ("{D}{I}",   "PAST",       2),   # görülen geçmiş -dı/-di/-du/-dü
+    ("{I}r",     "AOR",        3),   # geniş zaman -ır/-ir/-ur/-ür (gelebilir→bil+ir)
+    ("{A}r",     "AOR",        3),   # geniş zaman -ar/-er (gel+er)
+]
+
+
+def _expand_suffix_tmpl(tmpl: str) -> List[str]:
+    """Şablon değişkenlerini tüm olasılıklara açar."""
+    results = [tmpl]
+    for ph, opts in [("{A}", "ae"), ("{I}", "ıiuü"), ("{D}", "dt"), ("{C}", "cç")]:
+        expanded = []
+        for r in results:
+            if ph in r:
+                for o in opts:
+                    expanded.append(r.replace(ph, o))
+            else:
+                expanded.append(r)
+        results = expanded
+    return results
+
+
+# Şablonları önceden aç, uzun ekler önce gelecek şekilde sırala
+_MORPH_SUFFIX_FORMS: List[Tuple[str, str, int]] = sorted(
+    [
+        (form, label, min_stem)
+        for tmpl, label, min_stem in _MORPH_SUFFIX_DEFS
+        for form in _expand_suffix_tmpl(tmpl)
+    ],
+    key=lambda x: -len(x[0]),
+)
+
+
+def _strip_morph_labels(word: str, max_strips: int = 5) -> List[str]:
+    """
+    Sözcükten greedy olarak ekleri soyar, etiket listesi döner.
+
+    Örnek:
+      yazılıyor  → ['PRES', 'PASS']
+      giderse    → ['CND']
+      gelebilir  → ['POT']
+    """
+    wl = word.lower()
+    labels: List[str] = []
+    for _ in range(max_strips):
+        for form, label, min_stem in _MORPH_SUFFIX_FORMS:
+            if wl.endswith(form) and len(wl) - len(form) >= min_stem:
+                labels.append(label)
+                wl = wl[: -len(form)]
+                break
+        else:
+            break  # hiçbir ek eşleşmedi
+    return labels
+
 NONE_LABEL = "NONE"
 
 
@@ -157,6 +243,13 @@ def _word_feats(word: str, prefix: str) -> Dict[str, object]:
     for flag_name, pattern in _MOOD_FLAGS:
         if pattern.search(wl):
             d[f"{prefix}flag.{flag_name}"] = True
+    # Kural-tabanlı ek soyucu — ek zinciri etiketleri
+    morph_labels = _strip_morph_labels(word)
+    for lbl in morph_labels:
+        d[f"{prefix}ms.{lbl}"] = True
+    # Ek zinciri sırası: hangi ek önce/sonra geldi
+    if len(morph_labels) >= 2:
+        d[f"{prefix}ms.seq"] = "_".join(morph_labels[:2])
     return d
 
 
