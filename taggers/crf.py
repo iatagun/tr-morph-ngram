@@ -108,16 +108,22 @@ _PRONOUN_ROOTS: List[Tuple[str, str]] = [
     # uzundan kısaya sıralandı (prefix eşleşmesi için)
     ("hiçbirini", "Neg"),  ("hiçbirine", "Neg"),  ("hiçbirinde","Neg"),
     ("hiçbirinden","Neg"), ("hiçbirleri","Neg"),
-    ("birileri",  "Ind"),  ("birbirini", "Rfl"),  ("birbirine", "Rfl"),
-    ("birbirinde","Rfl"),  ("birbirinden","Rfl"),
-    ("hiçbiri",   "Neg"),  ("birbirler", "Rfl"),  ("birbirleri","Rfl"),
-    ("hepimizi",  "Tot"),  ("hepimize",  "Tot"),  ("hepimizde", "Tot"),
-    ("hepimizden","Tot"),  ("hepinizi",  "Tot"),  ("hepinize",  "Tot"),
-    ("hepinizden","Tot"),  ("hepinizde", "Tot"),
+    ("birileri",  "Ind"),
+    # birbirX → BOUN'da Ind (not Rfl)
+    ("birbirlerine","Ind"),("birbirleriyle","Ind"),("birbirlerimize","Ind"),
+    ("birbirlerinize","Ind"),("birbirleri","Ind"),("birbirimize","Ind"),
+    ("birbirinize","Ind"),("birbirinden","Ind"),("birbirlerine","Ind"),
+    ("birbirine",  "Ind"), ("birbirini",  "Ind"), ("birbirinde", "Ind"),
+    ("birbirinden","Ind"), ("birbirler",  "Ind"), ("birbirimiz", "Ind"),
+    ("birbiriniz", "Ind"), ("birbirle",   "Ind"), ("birbirden",  "Ind"),
+    ("hiçbiri",   "Neg"),
+    ("hepimizi",  "Ind"),  ("hepimize",  "Ind"),  ("hepimizde", "Ind"),
+    ("hepimizden","Ind"),  ("hepinizi",  "Ind"),  ("hepinize",  "Ind"),
+    ("hepinizden","Ind"),  ("hepinizde", "Ind"),
     ("herkesin",  "Tot"),  ("herkese",   "Tot"),  ("herkeste",  "Tot"),
     ("herkesten", "Tot"),  ("herkesi",   "Tot"),
     ("kendileri", "Rfl"),  ("kendinizi", "Rfl"),  ("kendinize", "Rfl"),
-    ("kendinizde","Rfl"),  ("kendinizden","Rfl"),  ("kendimizi", "Rfl"),
+    ("kendinizde","Rfl"),  ("kendinizden","Rfl"), ("kendimizi", "Rfl"),
     ("kendimize", "Rfl"),  ("kendimizden","Rfl"),
     ("kendisini", "Rfl"),  ("kendisine", "Rfl"),  ("kendisinde","Rfl"),
     ("kendisinden","Rfl"), ("kendiniz",  "Rfl"),  ("kendimiz",  "Rfl"),
@@ -132,18 +138,20 @@ _PRONOUN_ROOTS: List[Tuple[str, str]] = [
     ("birkaç",    "Ind"),  ("bütünü",    "Tot"),  ("bütüne",    "Tot"),
     ("bütünde",   "Tot"),  ("bütünden",  "Tot"),  ("bütün",     "Tot"),
     ("hangi",     "Int"),  ("herkes",    "Tot"),  ("kimse",     "Neg"),
-    ("hepsini",   "Tot"),  ("hepsine",   "Tot"),  ("hepsinde",  "Tot"),
-    ("hepsinden", "Tot"),  ("hepsinin",  "Tot"),
-    ("hepimiz",   "Tot"),  ("hepiniz",   "Tot"),  ("hepsi",     "Tot"),
-    ("hepim",     "Tot"),  ("hepin",     "Tot"),
+    # hepsi/hepsini → BOUN'da Ind
+    ("hepsini",   "Ind"),  ("hepsine",   "Ind"),  ("hepsinde",  "Ind"),
+    ("hepsinden", "Ind"),  ("hepsinin",  "Ind"),  ("hepsi",     "Ind"),
+    ("hepimiz",   "Ind"),  ("hepiniz",   "Ind"),
+    ("hepim",     "Ind"),  ("hepin",     "Ind"),
     ("bazısı",    "Ind"),  ("bazıları",  "Ind"),  ("bazısını",  "Ind"),
     ("bazı",      "Ind"),  ("birisi",    "Ind"),  ("biri",      "Ind"),
+    ("çoğu",      "Ind"),  ("çoğunu",    "Ind"),  ("çoğunun",   "Ind"),
+    ("kimisi",    "Ind"),  ("birçoğu",   "Ind"),  ("birçoğunun","Ind"),
     ("tüm",       "Tot"),
     ("kendi",     "Rfl"),
     ("kendim",    "Rfl"),  ("kendin",    "Rfl"),
     ("öbürü",     "Dem"),  ("öteki",     "Dem"),  ("öbürünü",   "Dem"),
     ("böyle",     "Dem"),  ("şöyle",     "Dem"),  ("öyle",      "Dem"),
-    ("birbirle",  "Rfl"),
     ("ben",       "Prs"),  ("sen",       "Prs"),  ("biz",       "Prs"),
     ("siz",       "Prs"),  ("kim",       "Int"),  ("kaç",       "Int"),
     ("hiç",       "Neg"),  ("nasıl",     "Int"),  ("niçin",     "Int"),
@@ -161,13 +169,28 @@ for _stem, _ptype in [
                  "nları", "nlardan", "nların", "nca", "nunla", "nunki",
                  "nunkine", "nunkini", "nundan"]:
         _SHORT_PRON[_stem + _suf] = _ptype
+# ben/sen/biz/siz düzensiz çekim formları
+for _f in ["bana", "beni", "benim", "bende", "benden", "benle",
+           "sana", "seni", "senin", "sende", "senden", "senle",
+           "bize",  "bizi",  "bizim",  "bizde",  "bizden",  "bizle",
+           "size",  "sizi",  "sizin",  "sizde",  "sizden",  "sizle"]:
+    _SHORT_PRON[_f] = "Prs"
+# kim → Int; kimi/kimini/kimisi → Ind (BOUN annotation)
+for _f in ["kim", "kime", "kimin", "kimde", "kimden", "kimle"]:
+    _SHORT_PRON[_f] = "Int"
+for _f in ["kimi", "kimini", "kimine", "kiminde", "kiminden",
+           "kimisi", "kimisini", "kimisine"]:
+    _SHORT_PRON[_f] = "Ind"
 # "ne" düzensiz çekim
 for _f in ["ne", "neyi", "neye", "neyin", "nede", "neden", "neyle",
-           "neler", "neleri", "nelere", "nelerin", "nelerde", "nelerden",
-           "nereye", "nerede", "nereden", "neresi", "nereyi", "nereye",
-           "nereye", "neredeyse", "neredesin", "nerelerde", "nerelere",
-           "nerelisin", "nereye", "nereden"]:
+           "neler", "neleri", "nelere", "nelerin", "nelerde", "nelerden"]:
     _SHORT_PRON[_f] = "Int"
+# Yer zarfı soru/gösterme → PronType=Loc (BOUN corpus)
+for _f in ["nerede", "nereye", "nereden", "neresi", "nereyi", "neredeyse",
+           "burada", "buraya", "buradan", "burası", "burayı",
+           "şurada", "şuraya", "şuradan", "şurası", "şurayı",
+           "orada",  "oraya",  "oradan",  "orası",  "orayı"]:
+    _SHORT_PRON[_f] = "Loc"
 # "her" ve "tüm" exact-match: çok anlamlı kısa kökler
 for _f in ["her", "tüm", "tümü", "tümünü", "tümüne", "tümünde", "tümünden", "tümünün"]:
     if _f not in _SHORT_PRON:
