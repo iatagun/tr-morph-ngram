@@ -213,6 +213,37 @@ def _pronoun_type(wl: str) -> Optional[str]:
     return None
 
 
+# predict() override için güvenli exact-match formlar:
+# yalnızca belirsizliği olmayan (belirteç/sıfat olarak kullanılmayan) formlar.
+# NOT: ben/sen/biz/siz çekim formları (benim/bana/beni...) BOUN corpus'ta
+#      PronType annotation tutarsız → false positive riski, buraya alınmadı.
+_SAFE_PRON_OVERRIDE: Dict[str, str] = {}
+# kim çekim formları: her bağlamda kesinlikle zamir
+for _f in ["kim", "kime", "kimin", "kimde", "kimden", "kimle"]:
+    _SAFE_PRON_OVERRIDE[_f] = "Int"
+# kimi/kimisi → BOUN annotation: Ind (not Int)
+for _f in ["kimi", "kimini", "kimine", "kiminde", "kiminden",
+           "kimisi", "kimisini", "kimisine"]:
+    _SAFE_PRON_OVERRIDE[_f] = "Ind"
+# yer zamirleri → Loc
+for _f in ["nerede", "nereye", "nereden", "neresi", "nereyi",
+           "burada", "buraya", "buradan", "burası", "burayı",
+           "şurada", "şuraya", "şuradan", "şurası", "şurayı",
+           "orada",  "oraya",  "oradan",  "orası",  "orayı"]:
+    _SAFE_PRON_OVERRIDE[_f] = "Loc"
+
+
+def _pronoun_type_override(wl: str) -> Optional[str]:
+    """
+    predict() sonrası PronType override için güvenli tespit.
+
+    Sadece _SAFE_PRON_OVERRIDE exact match formları için tahmin döner.
+    Kısa/belirsiz base formlar (bu/o/şu/ne/ben/her...) ve prefix match yok
+    → corpus annotation tutarsızlığından kaynaklanan false positive önlenir.
+    """
+    return _SAFE_PRON_OVERRIDE.get(wl)
+
+
 # ─── Kural-tabanlı ek soyucu ─────────────────────────────────────────────────
 # Türkçe morfoloji analizörünün suffix registry'sinden çıkarılmış bilgi.
 # Şablon: {A}→a/e  {I}→ı/i/u/ü  {D}→d/t  {C}→c/ç
@@ -452,13 +483,17 @@ class FactorizedCRFTagger:
         self.crfs: Dict[str, sklearn_crfsuite.CRF] = {}
         self.dimensions: List[str] = []
 
-    def _make_crf(self) -> sklearn_crfsuite.CRF:
+    def _make_crf(self, dim: str = "") -> sklearn_crfsuite.CRF:
         """Seçili algoritmaya göre CRF nesnesi oluştur."""
         if self.algorithm == "lbfgs":
+            # PronType: sparse sınıf, L1 regularization sparse feature'ları eziyor.
+            # Daha düşük c1 ile daha iyi öğrenme sağlanır.
+            c1 = 0.0 if dim == "PronType" else self.c1
+            c2 = 0.01 if dim == "PronType" else self.c2
             return sklearn_crfsuite.CRF(
                 algorithm="lbfgs",
-                c1=self.c1,
-                c2=self.c2,
+                c1=c1,
+                c2=c2,
                 max_iterations=self.max_iterations,
                 all_possible_transitions=True,
             )
@@ -493,7 +528,7 @@ class FactorizedCRFTagger:
         for dim in self.dimensions:
             y = self._extract_dim_labels(train_sentences, dim)
             unique = set(lbl for seq in y for lbl in seq)
-            crf = self._make_crf()
+            crf = self._make_crf(dim)
             crf.fit(X, y)
             self.crfs[dim] = crf
             print(f"    {dim:<20} {len(unique)} etiket  ✓")
@@ -524,9 +559,17 @@ class FactorizedCRFTagger:
 
         # Boyutları birleştir
         result = []
-        for i in range(len(tokens)):
+        for i, tok in enumerate(tokens):
             d = {dim: dim_preds[dim][i] for dim in self.dimensions
                  if dim_preds[dim][i] != NONE_LABEL}
+            # PronType: kural-tabanlı tespit varsa CRF tahminini geçersiz kıl.
+            # Zamir sınıfı kapalı; kural kapsamamız ~%93 → daha güvenilir.
+            pron_rule = _pronoun_type_override(tok.lower())
+            if pron_rule:
+                d["PronType"] = pron_rule
+            elif "PronType" in d and not pron_rule:
+                # CRF yanlış pozitif veriyorsa temizle
+                del d["PronType"]
             result.append(dict_to_feats(d))
         return result
 
@@ -729,7 +772,7 @@ class StackedCRFTagger(FactorizedCRFTagger):
         for dim in self.dimensions:
             y = self._extract_dim_labels(train_sentences, dim)
             unique = set(lbl for seq in y for lbl in seq)
-            crf = self._make_crf()
+            crf = self._make_crf(dim)
             crf.fit(X, y)
             self.crfs[dim] = crf
             print(f"    {dim:<20} {len(unique)} etiket  ✓")
@@ -741,9 +784,15 @@ class StackedCRFTagger(FactorizedCRFTagger):
         for dim, crf in self.crfs.items():
             dim_preds[dim] = crf.predict(X)[0]
         result = []
-        for i in range(len(tokens)):
+        for i, tok in enumerate(tokens):
             d = {dim: dim_preds[dim][i] for dim in self.dimensions
                  if dim_preds[dim][i] != NONE_LABEL}
+            # PronType: kural-tabanlı tespit varsa CRF tahminini geçersiz kıl.
+            pron_rule = _pronoun_type_override(tok.lower())
+            if pron_rule:
+                d["PronType"] = pron_rule
+            elif "PronType" in d and not pron_rule:
+                del d["PronType"]
             result.append(dict_to_feats(d))
         return result
 
