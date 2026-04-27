@@ -563,13 +563,10 @@ class FactorizedCRFTagger:
             d = {dim: dim_preds[dim][i] for dim in self.dimensions
                  if dim_preds[dim][i] != NONE_LABEL}
             # PronType: kural-tabanlı tespit varsa CRF tahminini geçersiz kıl.
-            # Zamir sınıfı kapalı; kural kapsamamız ~%93 → daha güvenilir.
+            # Sadece pozitif eşleşmede override yap; CRF tahminini asla silme.
             pron_rule = _pronoun_type_override(tok.lower())
             if pron_rule:
                 d["PronType"] = pron_rule
-            elif "PronType" in d and not pron_rule:
-                # CRF yanlış pozitif veriyorsa temizle
-                del d["PronType"]
             result.append(dict_to_feats(d))
         return result
 
@@ -791,8 +788,6 @@ class StackedCRFTagger(FactorizedCRFTagger):
             pron_rule = _pronoun_type_override(tok.lower())
             if pron_rule:
                 d["PronType"] = pron_rule
-            elif "PronType" in d and not pron_rule:
-                del d["PronType"]
             result.append(dict_to_feats(d))
         return result
 
