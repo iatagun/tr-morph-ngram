@@ -81,8 +81,23 @@ for word, feats in tags:
 ### Evaluate
 
 ```bash
-python eval.py --model hybrid --decode viterbi
+# BOUN dev split (varsayılan)
+python scripts/eval.py --model hybrid --decode viterbi
+
+# Özel CoNLL-U dosyası — kalite raporu + doğruluk değerlendirmesi
+python scripts/eval.py --gold path/to/file.conllu --model hybrid
+
+# Yalnızca kalite raporu (model gerekmez)
+python scripts/eval.py --gold path/to/file.conllu --quality
 ```
+
+`--quality` modu aşağıdaki metrikleri raporlar:
+- Cümle ve token sayısı, ortalama cümle uzunluğu
+- UPOS / FEATS / LEMMA / DEPREL kapsama oranları
+- UPOS dağılımı (görsel bar grafik)
+- Morfolojik özellik dağılımı (Feature Coverage)
+- UPOS-FEATS tutarsızlık uyarıları (örn. NOUN tokeni Case eksik)
+- HEAD sınır dışı hataları
 
 ### Tune w_trans (multiprocessing)
 
