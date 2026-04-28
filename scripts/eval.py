@@ -11,12 +11,14 @@ Kullanım:
   python eval.py --max-sents 200          # ilk 200 cümle
   python eval.py --compare                # greedy vs viterbi yan yana
   python eval.py --dep-model model_dep    # istatistiksel dep parser kullan
+  python eval.py --gold dosya.conllu      # özel CoNLL-U dosyası
+  python eval.py --gold dosya.conllu --quality   # yalnızca kalite raporu
 """
 
 import argparse
 import sys
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from taggers import dep as _dep_parser
 
@@ -82,9 +84,9 @@ def read_gold_conllu(path: Path):
 
 def predict(model, tokens, decode="greedy"):
     """
-    Modelin tahmin etti?i FEATS etiketlerini d?nd?r?r.
-    UnigramLM i?in do?rudan model.predict() ?a?r?l?r.
-    NgramLM i?in greedy/viterbi decode.
+    Modelin tahmin ettiği FEATS etiketlerini döndürür.
+    UnigramLM için doğrudan model.predict() çağrılır.
+    NgramLM için greedy/viterbi decode.
     """
     if isinstance(model, UnigramLM):
         return model.predict(tokens)
@@ -112,18 +114,18 @@ def predict(model, tokens, decode="greedy"):
     return preds
 
 
-# ??? De?erlendirme ????????????????????????????????????????????????????????????
+# ─── Değerlendirme ───────────────────────────────────────────────────────────
 
 def evaluate(model, sentences, decode="greedy", max_sents=None,
              dep_model=None):
     """
-    Token d?zeyinde metrikler d?ner:
-      feats_exact  : FEATS tam e?le?me
-      feats_partial: En az 1 ?zellik do?ru
-      per_feature  : {?zellik_ad?: {correct, total}}
-      upos         : UPOS do?rulu?u
-      dep_uas      : UAS (HEAD do?rulu?u, punct hari?)
-      dep_las      : LAS (HEAD + DEPREL do?rulu?u, punct hari?)
+    Token düzeyinde metrikler döner:
+      feats_exact  : FEATS tam eşleşme
+      feats_partial: En az 1 özellik doğru
+      per_feature  : {özellik_adı: {correct, total}}
+      upos         : UPOS doğruluğu
+      dep_uas      : UAS (HEAD doğruluğu, punct hariç)
+      dep_las      : LAS (HEAD + DEPREL doğruluğu, punct hariç)
       lemma        : LEMMA exact match
     """
     stats = {
@@ -155,39 +157,39 @@ def evaluate(model, sentences, decode="greedy", max_sents=None,
             gold_f = tok_data["feats"]
             pred_f = pred_fs[i]
 
-            # ?? FEATS exact match ??
+            # ── FEATS exact match ──
             stats["feats_exact"]["total"] += 1
             if pred_f == gold_f:
                 stats["feats_exact"]["correct"] += 1
 
-            # ?? FEATS partial match ??
+            # ── FEATS partial match ──
             gold_pairs = set(gold_f.split("|")) if gold_f != "NONE" else set()
             pred_pairs = set(pred_f.split("|")) if pred_f != "NONE" else set()
             stats["feats_partial"]["total"] += 1
             if gold_pairs & pred_pairs:
                 stats["feats_partial"]["correct"] += 1
 
-            # ?? Per-feature accuracy ??
+            # ── Per-feature accuracy ──
             for kv in gold_pairs:
                 k, _, _ = kv.partition("=")
                 per_feat[k]["total"] += 1
                 if kv in pred_pairs:
                     per_feat[k]["correct"] += 1
 
-            # ?? UPOS ??
+            # ── UPOS ──
             gold_upos = tok_data["upos"]
             pred_upos = upos_from_feats_word(tok_data["form"], pred_f)
             stats["upos"]["total"] += 1
             if pred_upos == gold_upos:
                 stats["upos"]["correct"] += 1
 
-            # ?? LEMMA ??
+            # ── LEMMA ──
             pred_lemma = lemmatize(tok_data["form"], pred_f)
             stats["lemma"]["total"] += 1
             if pred_lemma.lower() == tok_data["lemma"].lower():
                 stats["lemma"]["correct"] += 1
 
-            # ?? Dependency (punct hari?) ??
+            # ── Dependency (punct hariç) ──
             if gold_upos != "PUNCT":
                 gold_head   = tok_data["head"]
                 gold_deprel = tok_data["deprel"]
@@ -202,7 +204,7 @@ def evaluate(model, sentences, decode="greedy", max_sents=None,
     return stats, per_feat
 
 
-# ??? Rapor yazd?r ?????????????????????????????????????????????????????????????
+# ─── Rapor yazdır ────────────────────────────────────────────────────────────
 
 def _acc(d):
     if d["total"] == 0:
@@ -211,12 +213,12 @@ def _acc(d):
 
 
 def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
-    print(f"\n  {'?'*62}")
+    print(f"\n  {'─'*62}")
     print(f"  Model: {model_name}  |  Decoding: {decode.upper()}")
-    print(f"  Sekt?r: {n_sents} c?mle, {n_toks} token")
-    print(f"  {'?'*62}")
-    print(f"  {'Metrik':<28} {'Do?ru':>8} {'Toplam':>8} {'Oran':>8}")
-    print(f"  {'?'*62}")
+    print(f"  Sektör: {n_sents} cümle, {n_toks} token")
+    print(f"  {'─'*62}")
+    print(f"  {'Metrik':<28} {'Doğru':>8} {'Toplam':>8} {'Oran':>8}")
+    print(f"  {'─'*62}")
 
     rows = [
         ("FEATS exact match",   "feats_exact"),
@@ -230,10 +232,10 @@ def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
         d = stats[key]
         print(f"  {label:<28} {d['correct']:>8,} {d['total']:>8,} {_acc(d):>7.2f}%")
 
-    print(f"\n  {'?'*62}")
-    print(f"  Per-feature accuracy (gold ?zellik baz?nda):")
-    print(f"  {'?zellik':<24} {'Do?ru':>8} {'Toplam':>8} {'Oran':>8}")
-    print(f"  {'?'*62}")
+    print(f"\n  {'─'*62}")
+    print(f"  Per-feature accuracy (gold özellik bazında):")
+    print(f"  {'Özellik':<24} {'Doğru':>8} {'Toplam':>8} {'Oran':>8}")
+    print(f"  {'─'*62}")
 
     for feat_key, d in sorted(per_feat.items(),
                                key=lambda x: -x[1]["total"]):
@@ -241,49 +243,254 @@ def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
             continue
         print(f"  {feat_key:<24} {d['correct']:>8,} {d['total']:>8,} {_acc(d):>7.2f}%")
 
-    print(f"  {'?'*62}\n")
+
+# ─── Kalite denetimi ──────────────────────────────────────────────────────────
+
+# Her UPOS için Türkçe'de beklenen temel özellik kümeleri
+_UPOS_EXPECTED_FEATS: dict[str, set[str]] = {
+    "VERB":  {"Tense", "Aspect", "Mood"},
+    "AUX":   {"Tense", "Aspect", "Mood"},
+    "NOUN":  {"Case", "Number"},
+    "PROPN": {"Case", "Number"},
+    "ADJ":   {"Case", "Number"},
+    "PRON":  {"Case", "Number", "Person"},
+    "DET":   {"Case", "Number"},
+    "NUM":   {"Case", "Number"},
+}
+
+# VerbForm değerleri Tense/Mood/Aspect beklentisini kaldırır (fiil değil)
+_VERBFORM_EXEMPTS_FINITE: frozenset[str] = frozenset({"Part", "Conv", "Vnoun"})
+
+# Bar grafiği için maksimum sütun genişliği
+_BAR_MAX_WIDTH = 30
 
 
-# ??? Ana giri? ????????????????????????????????????????????????????????????????
+def check_quality(sentences: list) -> dict:
+    """
+    CoNLL-U cümle listesinin kalite metriklerini hesaplar.
+
+    Döner:
+      n_sents          : cümle sayısı
+      n_tokens         : token sayısı
+      upos_coverage    : UPOS alanı dolu token sayısı
+      feats_coverage   : FEATS alanı dolu token sayısı
+      lemma_coverage   : LEMMA alanı dolu token sayısı
+      dep_coverage     : DEPREL alanı dolu token sayısı
+      upos_dist        : Counter(UPOS → count)
+      feats_dist       : Counter(FEATS_key → count)  (özellik adı bazında)
+      missing_required : Counter("UPOS:Feature" → kaç token'da eksik)
+      dep_errors       : sınır dışı HEAD içeren token açıklamaları (ilk 10)
+      sent_lengths     : cümle uzunluğu dağılımı (min/max/ortalama)
+    """
+    n_sents = len(sentences)
+    n_tokens = 0
+    upos_coverage = 0
+    feats_coverage = 0
+    lemma_coverage = 0
+    dep_coverage = 0
+    upos_dist: Counter = Counter()
+    feats_dist: Counter = Counter()
+    missing_required: Counter = Counter()
+    dep_errors: list = []
+    lengths: list = []
+
+    for sent in sentences:
+        toks = sent["tokens"]
+        n = len(toks)
+        lengths.append(n)
+        n_tokens += n
+
+        for i, tok in enumerate(toks):
+            upos   = tok["upos"]
+            feats  = tok["feats"]
+            lemma  = tok["lemma"]
+            head   = tok["head"]
+            deprel = tok["deprel"]
+
+            # Kapsam
+            if upos and upos != "_":
+                upos_coverage += 1
+            if feats != "NONE":
+                feats_coverage += 1
+            if lemma and lemma != "_":
+                lemma_coverage += 1
+            if deprel and deprel != "_":
+                dep_coverage += 1
+
+            upos_dist[upos] += 1
+
+            # Özellik adı dağılımı
+            if feats != "NONE":
+                for kv in feats.split("|"):
+                    k = kv.split("=")[0]
+                    feats_dist[k] += 1
+
+            # UPOS-FEATS tutarlılık denetimi
+            expected = _UPOS_EXPECTED_FEATS.get(upos, set())
+            if expected:
+                present_keys: set = set()
+                feat_vals: dict = {}
+                if feats != "NONE":
+                    for kv in feats.split("|"):
+                        k, _, v = kv.partition("=")
+                        present_keys.add(k)
+                        feat_vals[k] = v
+                # VerbForm=Part/Conv/Vnoun → fiil değil; Tense/Aspect/Mood beklenmez
+                if (upos in ("VERB", "AUX")
+                        and feat_vals.get("VerbForm") in _VERBFORM_EXEMPTS_FINITE):
+                    expected = set()
+                for feat_key in expected - present_keys:
+                    missing_required[f"{upos}:{feat_key}"] += 1
+
+            # HEAD sınır denetimi
+            if head < 0 or head > n:
+                snippet = sent["text"][:40] if sent.get("text") else f"cümle-{len(lengths)}"
+                dep_errors.append(
+                    f"{snippet!r}  — token {i+1} ({tok['form']!r})  HEAD={head}  (n={n})"
+                )
+
+    avg_len = sum(lengths) / n_sents if n_sents else 0.0
+    min_len = min(lengths) if lengths else 0
+    max_len = max(lengths) if lengths else 0
+
+    return {
+        "n_sents":          n_sents,
+        "n_tokens":         n_tokens,
+        "upos_coverage":    upos_coverage,
+        "feats_coverage":   feats_coverage,
+        "lemma_coverage":   lemma_coverage,
+        "dep_coverage":     dep_coverage,
+        "upos_dist":        upos_dist,
+        "feats_dist":       feats_dist,
+        "missing_required": missing_required,
+        "dep_errors":       dep_errors[:10],
+        "sent_lengths":     {"min": min_len, "max": max_len, "avg": avg_len},
+    }
+
+
+def print_quality_report(qstats: dict, path: "Path | str") -> None:
+    """Kalite raporunu ekrana yazdırır."""
+    n = qstats["n_tokens"]
+
+    def pct(k: str) -> float:
+        return 100 * qstats[k] / n if n > 0 else 0.0
+
+    print(f"\n  {'═'*62}")
+    print(f"  KALİTE RAPORU: {Path(path).name}")
+    print(f"  {'═'*62}")
+    print(f"  Cümle sayısı   : {qstats['n_sents']:,}")
+    print(f"  Token sayısı   : {n:,}")
+    sl = qstats["sent_lengths"]
+    print(f"  Cümle uzunluğu : ort. {sl['avg']:.1f}  |  min {sl['min']}  |  max {sl['max']}")
+
+    print(f"\n  {'─'*62}")
+    print(f"  Kapsam (Coverage)")
+    print(f"  {'─'*62}")
+    print(f"  {'Alan':<24} {'Sayı':>8} {'Oran':>8}")
+    for label, key in [
+        ("UPOS",   "upos_coverage"),
+        ("FEATS",  "feats_coverage"),
+        ("LEMMA",  "lemma_coverage"),
+        ("DEPREL", "dep_coverage"),
+    ]:
+        print(f"  {label:<24} {qstats[key]:>8,} {pct(key):>7.2f}%")
+
+    print(f"\n  {'─'*62}")
+    print(f"  UPOS Dağılımı")
+    print(f"  {'─'*62}")
+    print(f"  {'UPOS':<12} {'Sayı':>8}  Oran")
+    for upos, cnt in sorted(qstats["upos_dist"].items(), key=lambda x: -x[1]):
+        bar = "█" * max(1, int(cnt / n * _BAR_MAX_WIDTH)) if n else ""
+        print(f"  {upos:<12} {cnt:>8,}  {bar}")
+
+    print(f"\n  {'─'*62}")
+    print(f"  Morfolojik Özellik Dağılımı (Feature Coverage)")
+    print(f"  {'─'*62}")
+    print(f"  {'Özellik':<24} {'Sayı':>8}")
+    for feat_key, cnt in sorted(qstats["feats_dist"].items(), key=lambda x: -x[1]):
+        print(f"  {feat_key:<24} {cnt:>8,}")
+
+    if qstats["missing_required"]:
+        print(f"\n  {'─'*62}")
+        print(f"  Eksik Beklenen Özellikler (UPOS:Feature — uyarı)")
+        print(f"  {'─'*62}")
+        for combo, cnt in sorted(
+            qstats["missing_required"].items(), key=lambda x: -x[1]
+        )[:20]:
+            print(f"  {combo:<36} {cnt:>6,} token")
+
+    if qstats["dep_errors"]:
+        print(f"\n  {'─'*62}")
+        print(f"  HEAD Sınır Dışı Hatalar (ilk {len(qstats['dep_errors'])})")
+        print(f"  {'─'*62}")
+        for err in qstats["dep_errors"]:
+            print(f"  {err}")
+
+    print(f"\n  {'═'*62}\n")
+
+
+# ─── Ana giriş ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="T?rk?e trigram morfoloji de?erlendirici"
+        description="Türkçe trigram morfoloji değerlendirici"
     )
     parser.add_argument("--model",     default="full",
                         help="Kullanılacak model adı — 'hybrid', 'hybrid_distil', 'ngram5' vb. "
                              "(models/model_<isim>.pkl dosyası yüklenir; varsayılan: full)")
     parser.add_argument("--split",     default="dev",
                         choices=["dev", "test", "train"],
-                        help="BOUN treebank b?l?m? (varsay?lan: dev)")
+                        help="BOUN treebank bölümü (varsayılan: dev); --gold verilirse görmezden gelinir")
+    parser.add_argument("--gold",      default=None,
+                        metavar="DOSYA",
+                        help="Değerlendirilecek CoNLL-U dosyası (herhangi bir yol). "
+                             "Verilmezse BOUN treebank kullanılır.")
+    parser.add_argument("--quality",   action="store_true",
+                        help="Yalnızca kalite raporu üret; model yükleme ve doğruluk "
+                             "değerlendirmesi yapılmaz.")
     parser.add_argument("--decode",    default="greedy",
                         choices=["greedy", "viterbi"],
-                        help="Decoding y?ntemi (varsay?lan: greedy)")
+                        help="Decoding yöntemi (varsayılan: greedy)")
     parser.add_argument("--compare",   action="store_true",
-                        help="Greedy ve Viterbi'yi yan yana kar??la?t?r")
+                        help="Greedy ve Viterbi'yi yan yana karşılaştır")
     parser.add_argument("--max-sents", type=int, default=None,
                         metavar="N",
-                        help="De?erlendirilecek maksimum c?mle say?s?")
+                        help="Değerlendirilecek maksimum cümle sayısı")
     parser.add_argument("--dep-model", default=None,
                         metavar="NAME",
                         help="İstatistiksel dep parser modeli (ör. model_dep). "
                              "Belirtilmezse kural tabanlı kullanılır.")
     args = parser.parse_args()
 
-    gold_path = DATA_DIR / f"tr_boun-ud-{args.split}.conllu"
+    # ── Gold dosya yolu ──────────────────────────────────────────────────────
+    if args.gold:
+        gold_path = Path(args.gold)
+    else:
+        gold_path = DATA_DIR / f"tr_boun-ud-{args.split}.conllu"
+
     if not gold_path.exists():
-        print(f"\n  HATA: {gold_path} bulunamad?."
-              f"\n  ?nce 'python trigram_morph.py' ?al??t?r?n.\n")
+        print(f"\n  HATA: {gold_path} bulunamadı.")
+        if not args.gold:
+            print(f"  Önce 'python trigram_morph.py' çalıştırın veya --gold ile dosya belirtin.")
         sys.exit(1)
 
-    print(f"\n  Gold veri y?kleniyor: {gold_path.name} ...", end="")
+    print(f"\n  Gold veri yükleniyor: {gold_path} ...", end="")
     sentences = read_gold_conllu(gold_path)
     n_sents   = len(sentences[:args.max_sents]) if args.max_sents else len(sentences)
     n_toks    = sum(len(s["tokens"]) for s in sentences[:args.max_sents or len(sentences)])
-    print(f" {n_sents} c?mle, {n_toks} token")
+    print(f" {n_sents} cümle, {n_toks} token")
 
+    # ── Kalite raporu ────────────────────────────────────────────────────────
+    qstats = check_quality(sentences[:args.max_sents or len(sentences)])
+    print_quality_report(qstats, gold_path)
+
+    # --quality bayrağı varsa model yükleme ve doğruluk değerlendirmesi yapma
+    if args.quality:
+        return
+
+    # ── Model yükleme ────────────────────────────────────────────────────────
     model_name = f"model_{args.model}"
-    print(f"  Model y?kleniyor: {model_name} ...", end="")
+    print(f"  Model yükleniyor: {model_name} ...", end="")
     if args.model == "unigram":
         model = UnigramLM.load(model_name)
     elif args.model == "orch":
