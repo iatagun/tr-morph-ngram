@@ -11,6 +11,7 @@ Kullanım:
   python eval.py --max-sents 200          # ilk 200 cümle
   python eval.py --compare                # greedy vs viterbi yan yana
   python eval.py --dep-model model_dep    # istatistiksel dep parser kullan
+  python eval.py --file path/to/file.conllu   # keyfi CoNLL-U dosyası değerlendir
 """
 
 import argparse
@@ -82,9 +83,9 @@ def read_gold_conllu(path: Path):
 
 def predict(model, tokens, decode="greedy"):
     """
-    Modelin tahmin etti?i FEATS etiketlerini d?nd?r?r.
-    UnigramLM i?in do?rudan model.predict() ?a?r?l?r.
-    NgramLM i?in greedy/viterbi decode.
+    Modelin tahmin ettiği FEATS etiketlerini döndürür.
+    UnigramLM için doğrudan model.predict() çağrılır.
+    NgramLM için greedy/viterbi decode.
     """
     if isinstance(model, UnigramLM):
         return model.predict(tokens)
@@ -112,18 +113,18 @@ def predict(model, tokens, decode="greedy"):
     return preds
 
 
-# ??? De?erlendirme ????????????????????????????????????????????????????????????
+# ─── Değerlendirme ───────────────────────────────────────────────────────────
 
 def evaluate(model, sentences, decode="greedy", max_sents=None,
              dep_model=None):
     """
-    Token d?zeyinde metrikler d?ner:
-      feats_exact  : FEATS tam e?le?me
-      feats_partial: En az 1 ?zellik do?ru
-      per_feature  : {?zellik_ad?: {correct, total}}
-      upos         : UPOS do?rulu?u
-      dep_uas      : UAS (HEAD do?rulu?u, punct hari?)
-      dep_las      : LAS (HEAD + DEPREL do?rulu?u, punct hari?)
+    Token düzeyinde metrikler döner:
+      feats_exact  : FEATS tam eşleşme
+      feats_partial: En az 1 özellik doğru
+      per_feature  : {özellik_adı: {correct, total}}
+      upos         : UPOS doğruluğu
+      dep_uas      : UAS (HEAD doğruluğu, punct hariç)
+      dep_las      : LAS (HEAD + DEPREL doğruluğu, punct hariç)
       lemma        : LEMMA exact match
     """
     stats = {
@@ -155,39 +156,39 @@ def evaluate(model, sentences, decode="greedy", max_sents=None,
             gold_f = tok_data["feats"]
             pred_f = pred_fs[i]
 
-            # ?? FEATS exact match ??
+            # ── FEATS exact match ──
             stats["feats_exact"]["total"] += 1
             if pred_f == gold_f:
                 stats["feats_exact"]["correct"] += 1
 
-            # ?? FEATS partial match ??
+            # ── FEATS partial match ──
             gold_pairs = set(gold_f.split("|")) if gold_f != "NONE" else set()
             pred_pairs = set(pred_f.split("|")) if pred_f != "NONE" else set()
             stats["feats_partial"]["total"] += 1
             if gold_pairs & pred_pairs:
                 stats["feats_partial"]["correct"] += 1
 
-            # ?? Per-feature accuracy ??
+            # ── Per-feature accuracy ──
             for kv in gold_pairs:
                 k, _, _ = kv.partition("=")
                 per_feat[k]["total"] += 1
                 if kv in pred_pairs:
                     per_feat[k]["correct"] += 1
 
-            # ?? UPOS ??
+            # ── UPOS ──
             gold_upos = tok_data["upos"]
             pred_upos = upos_from_feats_word(tok_data["form"], pred_f)
             stats["upos"]["total"] += 1
             if pred_upos == gold_upos:
                 stats["upos"]["correct"] += 1
 
-            # ?? LEMMA ??
+            # ── LEMMA ──
             pred_lemma = lemmatize(tok_data["form"], pred_f)
             stats["lemma"]["total"] += 1
             if pred_lemma.lower() == tok_data["lemma"].lower():
                 stats["lemma"]["correct"] += 1
 
-            # ?? Dependency (punct hari?) ??
+            # ── Dependency (punct hariç) ──
             if gold_upos != "PUNCT":
                 gold_head   = tok_data["head"]
                 gold_deprel = tok_data["deprel"]
@@ -202,7 +203,7 @@ def evaluate(model, sentences, decode="greedy", max_sents=None,
     return stats, per_feat
 
 
-# ??? Rapor yazd?r ?????????????????????????????????????????????????????????????
+# ─── Rapor yazdır ────────────────────────────────────────────────────────────
 
 def _acc(d):
     if d["total"] == 0:
@@ -211,12 +212,12 @@ def _acc(d):
 
 
 def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
-    print(f"\n  {'?'*62}")
+    print(f"\n  {'═'*62}")
     print(f"  Model: {model_name}  |  Decoding: {decode.upper()}")
-    print(f"  Sekt?r: {n_sents} c?mle, {n_toks} token")
-    print(f"  {'?'*62}")
-    print(f"  {'Metrik':<28} {'Do?ru':>8} {'Toplam':>8} {'Oran':>8}")
-    print(f"  {'?'*62}")
+    print(f"  Sektör: {n_sents} cümle, {n_toks} token")
+    print(f"  {'═'*62}")
+    print(f"  {'Metrik':<28} {'Doğru':>8} {'Toplam':>8} {'Oran':>8}")
+    print(f"  {'═'*62}")
 
     rows = [
         ("FEATS exact match",   "feats_exact"),
@@ -230,10 +231,10 @@ def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
         d = stats[key]
         print(f"  {label:<28} {d['correct']:>8,} {d['total']:>8,} {_acc(d):>7.2f}%")
 
-    print(f"\n  {'?'*62}")
-    print(f"  Per-feature accuracy (gold ?zellik baz?nda):")
-    print(f"  {'?zellik':<24} {'Do?ru':>8} {'Toplam':>8} {'Oran':>8}")
-    print(f"  {'?'*62}")
+    print(f"\n  {'═'*62}")
+    print(f"  Per-feature accuracy (gold özellik bazında):")
+    print(f"  {'Özellik':<24} {'Doğru':>8} {'Toplam':>8} {'Oran':>8}")
+    print(f"  {'═'*62}")
 
     for feat_key, d in sorted(per_feat.items(),
                                key=lambda x: -x[1]["total"]):
@@ -241,49 +242,59 @@ def print_report(stats, per_feat, decode, model_name, n_sents, n_toks):
             continue
         print(f"  {feat_key:<24} {d['correct']:>8,} {d['total']:>8,} {_acc(d):>7.2f}%")
 
-    print(f"  {'?'*62}\n")
+    print(f"  {'═'*62}\n")
 
 
-# ??? Ana giri? ????????????????????????????????????????????????????????????????
+# ─── Ana giriş ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="T?rk?e trigram morfoloji de?erlendirici"
+        description="Türkçe trigram morfoloji değerlendirici"
     )
     parser.add_argument("--model",     default="full",
                         help="Kullanılacak model adı — 'hybrid', 'hybrid_distil', 'ngram5' vb. "
                              "(models/model_<isim>.pkl dosyası yüklenir; varsayılan: full)")
     parser.add_argument("--split",     default="dev",
                         choices=["dev", "test", "train"],
-                        help="BOUN treebank b?l?m? (varsay?lan: dev)")
+                        help="BOUN treebank bölümü (varsayılan: dev)")
     parser.add_argument("--decode",    default="greedy",
                         choices=["greedy", "viterbi"],
-                        help="Decoding y?ntemi (varsay?lan: greedy)")
+                        help="Decoding yöntemi (varsayılan: greedy)")
     parser.add_argument("--compare",   action="store_true",
-                        help="Greedy ve Viterbi'yi yan yana kar??la?t?r")
+                        help="Greedy ve Viterbi'yi yan yana karşılaştır")
     parser.add_argument("--max-sents", type=int, default=None,
                         metavar="N",
-                        help="De?erlendirilecek maksimum c?mle say?s?")
+                        help="Değerlendirilecek maksimum cümle sayısı")
     parser.add_argument("--dep-model", default=None,
                         metavar="NAME",
                         help="İstatistiksel dep parser modeli (ör. model_dep). "
                              "Belirtilmezse kural tabanlı kullanılır.")
+    parser.add_argument("--file", default=None,
+                        metavar="PATH",
+                        help="Değerlendirilecek keyfi CoNLL-U dosyasının yolu. "
+                             "Verilirse --split yoksayılır.")
     args = parser.parse_args()
 
-    gold_path = DATA_DIR / f"tr_boun-ud-{args.split}.conllu"
+    if args.file:
+        gold_path = Path(args.file)
+    else:
+        gold_path = DATA_DIR / f"tr_boun-ud-{args.split}.conllu"
     if not gold_path.exists():
-        print(f"\n  HATA: {gold_path} bulunamad?."
-              f"\n  ?nce 'python trigram_morph.py' ?al??t?r?n.\n")
+        if args.file:
+            print(f"\n  HATA: Belirtilen dosya bulunamadı: {gold_path}\n")
+        else:
+            print(f"\n  HATA: {gold_path} bulunamadı."
+                  f"\n  Önce 'python trigram_morph.py' çalıştırın veya --file ile geçerli bir yol belirtin.\n")
         sys.exit(1)
 
-    print(f"\n  Gold veri y?kleniyor: {gold_path.name} ...", end="")
+    print(f"\n  Gold veri yükleniyor: {gold_path.name} ...", end="")
     sentences = read_gold_conllu(gold_path)
     n_sents   = len(sentences[:args.max_sents]) if args.max_sents else len(sentences)
     n_toks    = sum(len(s["tokens"]) for s in sentences[:args.max_sents or len(sentences)])
-    print(f" {n_sents} c?mle, {n_toks} token")
+    print(f" {n_sents} cümle, {n_toks} token")
 
     model_name = f"model_{args.model}"
-    print(f"  Model y?kleniyor: {model_name} ...", end="")
+    print(f"  Model yükleniyor: {model_name} ...", end="")
     if args.model == "unigram":
         model = UnigramLM.load(model_name)
     elif args.model == "orch":
